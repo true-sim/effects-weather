@@ -112,7 +112,7 @@ public final class BoltGeometry {
                 m = keep(m, a, mid, depth[s], channelEnd[s]);
                 m = keep(m, mid, b, depth[s], channelEnd[s]);
                 if (depth[s] < MAX_DEPTH && random() < config.branchChance()) {
-                    m = branch(m, mid, channelEnd[s], depth[s] + 1, config);
+                    m = branch(m, mid, channelEnd[s], depth[s] + 1, len, config);
                 }
             }
             System.arraycopy(tmpStart, 0, start, 0, m);
@@ -131,8 +131,12 @@ public final class BoltGeometry {
         return m + 1;
     }
 
-    /** A branch from {@code from} towards the channel's end, deflected randomly, branchLength of the way. */
-    private int branch(int m, int from, int toward, int d, LightningConfig config) {
+    /**
+     * A branch from {@code from} towards the channel's end, deflected randomly: branchLength of the remaining way,
+     * but at most three times the length of the segment it forks from, so forks made late (and no longer subdivided)
+     * stay short twigs while early ones become long, jagged arms.
+     */
+    private int branch(int m, int from, int toward, int d, double segmentLength, LightningConfig config) {
         double tx = x[toward] - x[from];
         double ty = y[toward] - y[from];
         double tz = z[toward] - z[from];
@@ -147,7 +151,7 @@ public final class BoltGeometry {
         double by = ty / remaining + 0.8 * rr * Maths.sin(phi);
         double bz = tz / remaining + 0.8 * rz;
         double norm = Math.sqrt(bx * bx + by * by + bz * bz);
-        double length = config.branchLength() * remaining / Math.max(norm, 1e-9);
+        double length = Math.min(config.branchLength() * remaining, 3 * segmentLength) / Math.max(norm, 1e-9);
         int tip = addPoint(x[from] + bx * length, y[from] + by * length, z[from] + bz * length);
         return keep(m, from, tip, d, tip);
     }

@@ -26,7 +26,8 @@ import com.truesim.effects.atmosphere.Quality;
  * @param precipitationMax the mature stage's precipitation
  * @param flashRateMin flashes per minute at maturity
  * @param flashRateMax flashes per minute at maturity
- * @param daughterRate daughter cells per minute of maturity
+ * @param daughterRate daughter cells per minute of maturity (0.06: about one per cell over a 15–30 minute mature
+ *     stage, so a multicell storm keeps a handful of cells instead of multiplying)
  * @param spawnRadius cells form and live within this distance of the focus, metres (they are dropped at 1.5×)
  * @param maxCells the capacity
  * @param rateScale multiplies the preset's storm rate
@@ -61,7 +62,7 @@ public record StormConfig(double growthMin, double growthMax, double matureMin, 
 
     /** The ranges above, 64 cells within 60 km. */
     public static StormConfig defaults() {
-        return new StormConfig(600, 1200, 900, 1800, 900, 2400, 1200, 8000, 14000, 2000, 6000, 3, 0.4, 1.0, 1, 8, 0.15,
+        return new StormConfig(600, 1200, 900, 1800, 900, 2400, 1200, 8000, 14000, 2000, 6000, 3, 0.4, 1.0, 1, 8, 0.06,
             60_000, 64, 1);
     }
 

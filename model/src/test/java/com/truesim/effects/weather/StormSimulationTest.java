@@ -130,15 +130,22 @@ class StormSimulationTest {
         assertThat(first).isEqualTo(GOLDEN);
     }
 
-    private static final long GOLDEN = 795748421977670522L;
+    private static final long GOLDEN = -4426776235528116309L;
 
     @Test
     void matureCellsGrowDaughters() {
-        StormSimulation storms = simulation(5, new LightningEvents(256));
-        storms.spawn(0, 0, 0);
-        for (int t = 0; t < 4000; t++) {
-            storms.step(t, 1, 0, WindProfile.calm(), 1, 0, 0, 0);
+        int multicell = 0;
+        for (long seed = 1; seed <= 10; seed++) {
+            StormSimulation storms = simulation(seed, new LightningEvents(256));
+            storms.spawn(0, 0, 0);
+            int most = 0;
+            for (int t = 0; t < 8000; t++) {
+                storms.step(t, 1, 0, WindProfile.calm(), 1, 0, 0, 0);
+                most = Math.max(most, storms.activeCount());
+            }
+            assertThat(most).isLessThanOrEqualTo(12); // a handful of cells, not a cascade
+            multicell += most > 1 ? 1 : 0;
         }
-        assertThat(storms.activeCount()).isGreaterThan(1); // a multicell storm
+        assertThat(multicell).isGreaterThanOrEqualTo(4); // most single cells seed at least one daughter
     }
 }
