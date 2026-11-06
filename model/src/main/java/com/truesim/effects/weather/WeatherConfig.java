@@ -17,7 +17,9 @@ import java.util.Objects;
  * @param farExtent the far map's edge on a flat world, metres (400 km)
  * @param globalFaceSize the global map's texels per cube face edge on a planet
  * @param tileTexels texels per tile edge (the refresh unit)
- * @param tilesPerStep near-map tiles refreshed per step (the far maps get a quarter, at least one)
+ * @param tilesPerStep near-map tiles refreshed per step on the CPU (the far maps get a quarter, at least one); about
+ *     0.3 µs per texel, so 4 tiles of 32² cost about 1.5 ms. GPU renderers evaluate the same {@link WeatherField}
+ *     in a compute pass instead and need only the small inputs (preset, cells, brushes)
  * @param maxBrushes brush capacity
  * @param lightningCapacity the lightning event ring's capacity
  * @param noiseOctaves the coverage noise's octaves
@@ -73,13 +75,13 @@ public record WeatherConfig(Simulation simulation, double step, long seed, int n
         LightningConfig lightning = LightningConfig.forQuality(quality);
         WindProfile wind = WindProfile.westerlies();
         return switch (quality) {
-            case LOW -> new WeatherConfig(Simulation.PRESETS, 1.0, 1, 128, 32_000, 64, 200_000, 32, 16, 4, 16, 64, 3,
+            case LOW -> new WeatherConfig(Simulation.PRESETS, 1.0, 1, 128, 32_000, 64, 200_000, 32, 16, 2, 16, 64, 3,
                 100, 2000, 100_000, wind, storms, lightning);
-            case MEDIUM -> new WeatherConfig(Simulation.STORMS, 1.0, 1, 256, 64_000, 128, 400_000, 64, 32, 8, 32, 128,
+            case MEDIUM -> new WeatherConfig(Simulation.STORMS, 1.0, 1, 256, 64_000, 128, 400_000, 64, 32, 2, 32, 128,
                 4, 100, 2000, 100_000, wind, storms, lightning);
-            case HIGH -> new WeatherConfig(Simulation.STORMS, 1.0, 1, 512, 64_000, 128, 400_000, 128, 32, 16, 64, 256,
+            case HIGH -> new WeatherConfig(Simulation.STORMS, 1.0, 1, 512, 64_000, 128, 400_000, 128, 32, 4, 64, 256,
                 4, 100, 2000, 100_000, wind, storms, lightning);
-            case ULTRA -> new WeatherConfig(Simulation.STORMS, 0.5, 1, 1024, 150_000, 256, 800_000, 256, 32, 32, 128,
+            case ULTRA -> new WeatherConfig(Simulation.STORMS, 0.5, 1, 1024, 150_000, 256, 800_000, 256, 32, 4, 128,
                 512, 5, 100, 2000, 200_000, wind, storms, lightning);
         };
     }

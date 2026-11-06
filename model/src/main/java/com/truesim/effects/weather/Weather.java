@@ -127,6 +127,20 @@ public final class Weather {
         steps++;
     }
 
+    /**
+     * Fills every tile of the maps now, e.g. behind a loading screen, instead of over the next steps' budgets. Costs
+     * about 0.3 µs per texel (0.3 s for the HIGH preset's maps).
+     */
+    public void refreshAll() {
+        int nearTiles = near.tilesPerEdge() * near.tilesPerEdge();
+        near.refresh(field, domain, nearTiles);
+        if (far != null) {
+            far.refresh(field, domain, far.tilesPerEdge() * far.tilesPerEdge());
+        } else {
+            global.refresh(field, 6 * global.tilesPerEdge() * global.tilesPerEdge());
+        }
+    }
+
     /** Runs the fixed steps that {@code seconds} more of game time complete; returns how many ran. */
     public int advance(double seconds) {
         accumulator += seconds;

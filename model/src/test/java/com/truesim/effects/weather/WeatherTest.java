@@ -193,6 +193,8 @@ class WeatherTest {
         assertThat(weather.globalMap()).isNull();
         near.invalidate();
         assertThat(near.sample(100_000, 0, fromMap)).isFalse();
+        weather.refreshAll();
+        assertThat(near.sample(100_000, 0, fromMap)).isTrue();
         assertThatIllegalArgumentException().isThrownBy(() -> new WeatherGrid(30, 1000, 8));
     }
 
@@ -262,6 +264,7 @@ class WeatherTest {
         weather.field().evaluate(r / len, r * u / len, r * u / len, direct);
         assertThat(fromMap.coverage()).isCloseTo(direct.coverage(), within(1e-5f));
         assertThat(global.sample(0, 0, 0, fromMap)).isFalse();
+        weather.refreshAll();
         assertThat(global.data()).hasSize(6 * 4 * 4 * 4);
         assertThat(global.tilesPerEdge()).isEqualTo(1);
         // Far from the anchor the near map re-anchors at the focus.
@@ -336,6 +339,7 @@ class WeatherTest {
     void presetsMapToTiers() {
         assertThat(WeatherConfig.forQuality(Quality.LOW).simulation()).isEqualTo(WeatherConfig.Simulation.PRESETS);
         assertThat(WeatherConfig.forQuality(Quality.MEDIUM).nearSize()).isEqualTo(256);
+        assertThat(WeatherConfig.forQuality(Quality.HIGH).tilesPerStep()).isEqualTo(4);
         assertThat(WeatherConfig.forQuality(Quality.HIGH).nearSize()).isEqualTo(512);
         assertThat(WeatherConfig.forQuality(Quality.ULTRA).nearExtent()).isEqualTo(150_000);
         assertThat(WeatherConfig.forQuality(Quality.HIGH).withSeed(9).seed()).isEqualTo(9);

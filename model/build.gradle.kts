@@ -15,3 +15,10 @@ dependencies {
 coverage {
     minimum = 0.9
 }
+
+// The benchmarks (TRUESIM_BENCHMARK=true) measure the code, not its coverage probes.
+tasks.test {
+    if (providers.environmentVariable("TRUESIM_BENCHMARK").orNull == "true") {
+        extensions.configure<JacocoTaskExtension> { isEnabled = false }
+    }
+}
