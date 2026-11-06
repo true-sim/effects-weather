@@ -18,7 +18,8 @@ import com.truesim.effects.weather.lightning.LightningEvents;
  * through three stages ({@link Stage}): <b>growing</b> (its top rises from the base to its maximum, towering cumulus
  * until 80 %, then cumulonimbus; rain starts at 70 %, the first flashes at 80 %), <b>mature</b> (full height, the
  * heaviest rain, peak flash rate, the anvil spreading downwind) and <b>dissipating</b> (rain and lightning die away,
- * the top sinks by a fifth, the anvil lingers and thins). It drifts with the wind at half its top's height (the
+ * the top sinks by a fifth, the anvil lingers and thins). Mature cells seed daughter cells on their flank (multicell
+ * storms) where no other core stands. It drifts with the wind at half its top's height (the
  * steering level). Flashes go to a {@link LightningEvents} ring. {@link #step} allocates nothing.
  */
 public final class StormSimulation {
@@ -172,12 +173,25 @@ public final class StormSimulation {
                 double r = coreRadius[s] * rng.nextDouble(1.5, 2.5);
                 System.arraycopy(position, 3 * s, point, 0, 3);
                 domain.move(point, 0, r * Maths.cos(theta), r * Maths.sin(theta), scratch);
-                spawn(point[0], point[1], point[2]);
+                // A new updraft needs room: none where another core already stands (its outflow suppresses it).
+                if (!crowded(point[0], point[1], point[2])) {
+                    spawn(point[0], point[1], point[2]);
+                }
             }
             if (lightning.enabled()) {
                 flashes(s, time, dt);
             }
         }
+    }
+
+    /** Whether a cell's core covers (x, y, z) within 1.2 of its radius. */
+    private boolean crowded(double x, double y, double z) {
+        for (int c = 0; c < capacity; c++) {
+            if (active[c] && distance(c, x, y, z) < 1.2 * coreRadius[c]) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private double distance(int s, double fx, double fy, double fz) {

@@ -29,7 +29,8 @@ import java.util.Objects;
  * @param boltLevels midpoint-displacement levels of a bolt's main channel (2^levels segments)
  * @param boltDisplacement the largest sideways displacement as a fraction of a segment's length
  * @param branchChance the chance per new point that a branch starts there
- * @param branchLength a branch's length relative to the parent segment's remaining length
+ * @param branchLength a branch's length relative to its channel's remaining length (at most three times the
+ *     segment it forks from)
  * @param branchBrightness brightness per branch depth relative to its parent
  * @param maxBoltPoints the bolt buffers' capacity
  * @param airTemperatureCelsius the air temperature for the speed of sound
