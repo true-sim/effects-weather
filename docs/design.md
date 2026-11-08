@@ -171,17 +171,17 @@ textures, the shadow table's screen-space masks, the scene's lights). Flat world
 
   | Scene | Tier | Clouds (march, temporal, composite / 2D) | Shadow map + mask | Frame (GPU) |
   |---|---|---|---|---|
-  | fair cumulus, ground | volumetric | 6.36-6.38 ms | 0.15 ms | 8.42-8.43 ms |
-  | fair cumulus, ground | layered | 3.32-3.35 ms | 0.15 ms | 5.38-5.42 ms |
+  | fair cumulus, ground | volumetric | 6.36-6.38 ms | 0.15 ms | 2.22-2.27 |
+  | fair cumulus, ground | layered | 3.32-3.35 ms | 0.15 ms | 1.11 |
   | fair cumulus, ground | skybox (2D) | 0.06 ms | 0.15 ms | 2.11-2.13 ms |
-  | overcast, ground | volumetric | 3.27-3.31 ms | 0.14 ms | 5.34-5.38 ms |
-  | overcast, ground | layered | 2.31-2.32 ms | 0.14 ms | 4.38-4.39 ms |
+  | overcast, ground | volumetric | 3.27-3.31 ms | 0.14 ms | 1.65-1.66 |
+  | overcast, ground | layered | 2.31-2.32 ms | 0.14 ms | 1.09-1.10 |
   | overcast, ground | skybox (2D) | 0.06 ms | 0.13 ms | 2.08-2.09 ms |
-  | thunderstorm, ground | volumetric | 4.91 ms | 0.23 ms | 7.05-7.06 ms |
-  | thunderstorm, ground | layered | 2.66 ms | 0.23 ms | 4.81-4.82 ms |
+  | thunderstorm, ground | volumetric | 4.91 ms | 0.23 ms | 2.04-2.06 |
+  | thunderstorm, ground | layered | 2.66 ms | 0.23 ms | 1.17 |
   | thunderstorm, ground | skybox (2D) | 0.06 ms | 0.23 ms | 2.19-2.20 ms |
-  | flying through | volumetric | 7.50-7.52 ms | 0.15 ms | 9.63-9.65 ms |
-  | flying through | layered | 5.94-5.96 ms | 0.15 ms | 8.02-8.07 ms |
+  | flying through | volumetric | 7.50-7.52 ms | 0.15 ms | 2.38-2.42 |
+  | flying through | layered | 5.94-5.96 ms | 0.15 ms | 1.45-1.46 |
   | flying through | skybox (2D) | 0.04 ms | 0.15 ms | 2.10-2.11 ms |
 
   More than the first version of this PR (layered fair cumulus 2.0 ms, flying through 4.3): steps now grow with the
@@ -277,13 +277,12 @@ Six fixes, each measured (tests that fail on the first round's code: run on its 
   frame (of 1, sRGB) everywhere, the display transform's dither, with no block pops, on the first round's code and
   this one alike: no noise or flicker of the shadow mask or the light.
 - **Not done, or still wrong**: the voxel cache and empty-space skipping (#8); the interleave of 4 brings little;
-  flying through a layer costs 1.59 ms layered (above 1.5); a thin dotted row of pixels right at the horizon from the
+  a thin dotted row of pixels right at the horizon from the
   half-resolution march straddling it; the anvil spreads over 20 minutes, so a 30-minute film ends with it half grown,
   and a cell's tower (a 2.7 km core radius) looks slender from 25 km; low-sun daytime clouds look flatter than the
   first round's (the sky light is now the sky's real one, larger than the old estimate at low sun; not compared with
   a path tracer, #10); the 2D tier keeps the analytic atmosphere and draws no anvils.
-- **Cost** ([#8](https://github.com/true-sim/effects-weather/issues/8)): a dynamically indexed local array (the nine
-  type weights) lived in scratch memory; it is indexed by constants now. And settings of the march's kind
+- **Cost** ([#8](https://github.com/true-sim/effects-weather/issues/8)): settings of the march's kind
   (`render.clouds.<kind>.*`), each measured against the reference (`CloudFixesTest.theCheaperMarchConvergesToThe
   ReferenceMarch`, converged still, mean difference over the mean): `interleave` 2 (one pixel of each 2 × 2 block
   marched a frame in a Bayer order, the rest the history reprojected and clamped to the new pixels around it: 0.81 %),
@@ -292,7 +291,9 @@ Six fixes, each measured (tests that fail on the first round's code: run on its 
   1 % transmittance), `detailFar` 30 km (detail is sub-pixel there): every saving together 2.8 %. Measured one by one
   (each alone against the reference): light every third sample 2.8 %, two light steps beyond 8 km 2.8 %, fine ratio
   0.5 0.5 %, 1 % cut-off 0.3 %, no detail beyond 30 km 0.5 %. A flash marches every pixel (it must answer within the
-  frame). The march's push constants are packed (the engine allows 128 bytes). Not done from #8: the voxel cache and
+  frame). The march's push constants are packed (the engine allows 128 bytes). Forcing the nine type weights'
+  loops to unroll (to keep them out of scratch memory) crashed llvmpipe on CI's Linux Mesa (LLVM 21.1.8: SIGSEGV in its
+  workers at the first frame; Windows Mesa 26.2.6 ran it) and measured no faster; it is not forced. Not done from #8: the voxel cache and
   empty-space skipping; the interleave of 4 measured no faster than 2 in the storm (2.0 against 1.9 ms: the longest
   rays bound the dispatch), so the defaults stay at 2.
 
@@ -301,19 +302,19 @@ Six fixes, each measured (tests that fail on the first round's code: run on its 
 
   | Scene | Tier | First round | Reference | Defaults |
   |---|---|---|---|---|
-  | fair cumulus, ground | volumetric | 6.35-6.41 | 6.92-6.95 | 2.32-2.34 |
-  | fair cumulus, ground | layered | 3.31-3.36 | 3.62-3.66 | 1.15-1.16 |
-  | overcast, ground | volumetric | 3.28-3.30 | 3.92-3.93 | 1.76-1.78 |
-  | overcast, ground | layered | 2.32-2.34 | 2.99-3.01 | 1.16-1.18 |
-  | thunderstorm, ground | volumetric | 4.92-4.94 | 8.45-8.49 | 2.84-2.85 |
-  | thunderstorm, ground | layered | 2.66-2.67 | 5.65-5.68 | 1.67-1.68 |
-  | flying through | volumetric | 7.51-7.52 | 8.45-8.51 | 2.60-2.62 |
-  | flying through | layered | 5.92-5.94 | 6.79-6.81 | 1.59 |
+  | fair cumulus, ground | volumetric | 6.35-6.41 | 6.92-6.95 | 2.22-2.27 |
+  | fair cumulus, ground | layered | 3.31-3.36 | 3.62-3.66 | 1.11 |
+  | overcast, ground | volumetric | 3.28-3.30 | 3.92-3.93 | 1.65-1.66 |
+  | overcast, ground | layered | 2.32-2.34 | 2.99-3.01 | 1.09-1.10 |
+  | thunderstorm, ground | volumetric | 4.92-4.94 | 8.45-8.49 | 2.04-2.06 |
+  | thunderstorm, ground | layered | 2.66-2.67 | 5.65-5.68 | 1.17 |
+  | flying through | volumetric | 7.51-7.52 | 8.45-8.51 | 2.38-2.42 |
+  | flying through | layered | 5.92-5.94 | 6.79-6.81 | 1.45-1.46 |
   | any | skybox (2D) | 0.04-0.06 | 0.04-0.06 | 0.04-0.06 |
 
   The storm costs more than the first round's at equal settings: its anvils, wider towers and their billows are cloud
-  the first round did not draw. Layered is within the report's 0.6-1.5 ms in fair weather and overcast and its 2-4 ms
-  in a storm; flying through a layer 1.59 ms. The shadow map and mask 0.13-0.29 ms, the GPU weather maps 0.20 ms.
+  the first round did not draw. The defaults' column is the final code's (its anvils thinner and towers solid since
+  the reference's run). Layered is within the report's 0.6-1.5 ms in every scene, flying through a layer 1.46 ms. The shadow map and mask 0.13-0.29 ms, the GPU weather maps 0.20 ms.
 
 ## Tiers and quality presets
 
