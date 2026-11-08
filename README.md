@@ -7,10 +7,11 @@ noise every cloud renderer reads. The modules depend only on the JDK and true-si
 common-math, scene, [effects-atmosphere](https://github.com/true-sim/effects-atmosphere)), so a server simulates the
 same storms as every client.
 
-Render techniques come as plugins over the engine's generic hooks: the first, `weather-snow`, is snow lying on
-surfaces as a surface shading hook; the others (2D, layered and fly-through volumetric clouds, cloud shadows, rain
-shafts, lightning glow and bolts) follow. The
-design, the tiers and the plan: [docs/design.md](docs/design.md).
+Render techniques come as plugins over the engine's generic hooks: `weather-snow` is snow lying on surfaces as a
+surface shading hook; `weather-render` draws ray-marched fly-through and layered clouds and a 2D tier
+(`render.clouds`), their Beer shadow map and the sun's shadow mask on the ground, rain shafts under storm cells, and
+lightning lighting the clouds from inside, the scene through its lights, and its bolts. The design, the tiers, the
+measurements and the plan: [docs/design.md](docs/design.md).
 
 | Module | Contents |
 |---|---|
@@ -18,6 +19,7 @@ design, the tiers and the plan: [docs/design.md](docs/design.md).
 | `weather-lightning` | Flash events for renderers and audio, flicker from stroke trains (with exact frame averages), branching bolt geometry from a seed, thunder timing. |
 | `weather-snow` | Simple snow as the engine's surface shading hook `weather.snow` ([#4](https://github.com/true-sim/effects-weather/issues/4), part 1): a top-down occlusion map (no snow under roofs), noise thresholded by coverage (0: exactly none), slopes, albedo/roughness/normal blended before lighting in every way of shading, opt-out per material and instance, accumulation and melting over time. Engine 0.192.0. |
 | `weather-model` | The weather maps (`WeatherGrid` near and far, `GlobalWeatherGrid` on a planet), `WeatherField` (preset + storms + brushes), presets and transitions, brushes (direct and as scene components), the wind profile, the storm life cycle (`StormSimulation`) and the `Weather` facade. |
+| `weather-render` | The render techniques (engine 0.192.0): `WeatherGpu` (the maps, profiles, noise and frame record on the GPU), `Clouds` (volumetric, layered, 2D tiers), `CloudShadowMap` and `CloudShadowMask`, rain shafts, `LightningLights` (flashes as scene lights) and `LightningBolts`; `CloudLighting`, the sun, sky and atmosphere the clouds need. |
 
 ```java
 Weather weather = new Weather(WeatherConfig.forQuality(Quality.HIGH), WeatherDomain.flat(), WeatherPreset.FAIR);
@@ -27,6 +29,23 @@ weather.addBrush(WeatherBrush.clear(5000), 0, 0, 0);    // the airfield stays cl
 weather.setFocus(camera.x(), camera.y(), camera.z());
 weather.advance(frameSeconds);                           // fixed steps, identical on every machine
 lastFlash = weather.lightning().forEachSince(lastFlash, (events, slot, id) -> thunder(events, slot));
+```
+
+## Clouds, rain and lightning
+
+```java
+WeatherGpu gpu = new WeatherGpu(device, slots, resources.textures(), weather, CloudTypes.physical(),
+    CloudsConfig.forQuality(Quality.HIGH), settings);
+CloudSettings.forQuality(settings, Quality.HIGH);          // render.clouds = layered
+port.add(new Clouds(gpu, view))                             // over the scene's colour, after the sky
+    .add(new CloudShadowMask(gpu, view, renderer, lights, sunLight)) // the clouds' shadow on the ground
+    .add(bolts.view(view));                                 // LightningBolts
+LightningLights flashes = new LightningLights(scene, NodeHandle.NONE, 4, 30_000);
+SceneSky sky = new SceneSky(scene, CloudLighting.Atmosphere.EARTH).sun(sunNode);
+// every frame, before the scene syncs its lights:
+gpu.update(weatherTime, frameSeconds, sky, settings);
+flashes.update(gpu);
+bolts.update();
 ```
 
 ## Simple snow
