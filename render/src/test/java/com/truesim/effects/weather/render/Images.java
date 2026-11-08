@@ -57,6 +57,27 @@ final class Images {
         return path;
     }
 
+    /** What a display shows ({@link CloudScene#shown}: sRGB-encoded values in [0, 1]) as {@code name}.png. */
+    static Path writeShown(String name, float[] rgb, int width, int height) {
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int o = 3 * (y * width + x);
+                int r = Math.round(Math.clamp(rgb[o], 0f, 1f) * 255);
+                int g = Math.round(Math.clamp(rgb[o + 1], 0f, 1f) * 255);
+                int b = Math.round(Math.clamp(rgb[o + 2], 0f, 1f) * 255);
+                image.setRGB(x, y, r << 16 | g << 8 | b);
+            }
+        }
+        Path path = directory().resolve(name + ".png");
+        try {
+            ImageIO.write(image, "png", path.toFile());
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return path;
+    }
+
     private static int encode(double v) {
         double x = Math.max(v, 0);
         double mapped = x * (2.51 * x + 0.03) / (x * (2.43 * x + 0.59) + 0.14);

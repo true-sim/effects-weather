@@ -90,6 +90,11 @@ public final class AtmosphereLighting implements CloudLighting {
     }
 
     @Override
+    public com.truesim.effects.atmosphere.render.Atmosphere tables() {
+        return atmosphere;
+    }
+
+    @Override
     public double units() {
         return atmosphere.sceneUnits();
     }

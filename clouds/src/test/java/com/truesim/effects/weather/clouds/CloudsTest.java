@@ -36,7 +36,7 @@ class CloudsTest {
         assertThat(cumulus.anvil(0.9)).isZero();
         CloudProfile cb = types.profile(CloudType.CUMULONIMBUS);
         assertThat(cb.anvil(0.7)).isZero();
-        assertThat(cb.anvil(1.0)).isEqualTo(1.5);
+        assertThat(cb.anvil(1.0)).isEqualTo(0.6); // the tower's top spreads a little; the anvil is drawn on its own
         assertThat(cb.thickness()).isEqualTo(11200);
         CloudProfile stratus = types.profile(CloudType.STRATUS);
         assertThat(stratus.density(0.3)).isGreaterThan(stratus.density(0.6)); // denser at the base

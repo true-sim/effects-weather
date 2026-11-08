@@ -61,15 +61,23 @@ void compositeMain(uint3 id : SV_DispatchThreadID)
         int2 offset = int2(k & 1, k >> 1);
         int2 q = clamp(base + offset, int2(0, 0), int2(marchSize) - 1);
         float bilinear = (offset.x == 1 ? fraction.x : 1 - fraction.x) * (offset.y == 1 ? fraction.y : 1 - fraction.y);
-        float marched = textures[push.cloudDepth].Load(int3(q, 0)).g;
+        float2 depths = textures[push.cloudDepth].Load(int3(q, 0)).rg;
+        float marched = depths.y;
         float agreement = 1 / (1.0e-3 + abs(min(distance, 1.0e7) - min(marched, 1.0e7)) / max(min(distance, 1.0e7), 1.0));
         float w = (bilinear + 1.0e-3) * agreement;
-        sum += w * textures[push.clouds].Load(int3(q, 0));
+        float4 c = textures[push.clouds].Load(int3(q, 0));
+        // A march texel straddling the horizon marched past this pixel's surface (to the sky beside it): clouds
+        // behind the surface are hidden by it, so that texel brings none here.
+        if (depths.x > 1.02 * distance + 50)
+        {
+            c = float4(0, 0, 0, 1);
+        }
+        sum += w * c;
         total += w;
     }
-    float4 c = sum / max(total, 1.0e-6);
+    float4 clouds = sum / max(total, 1.0e-6);
     float4 scene = images[push.color][id.xy];
-    float3 color = scene.rgb * c.a + c.rgb * push.scale;
+    float3 color = scene.rgb * clouds.a + clouds.rgb * push.scale;
     images[push.color][id.xy] = float4(min(color, 65000.0), scene.a);
 }
 

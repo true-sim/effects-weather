@@ -31,6 +31,9 @@ import com.truesim.effects.weather.render.layout.FieldCellLayout;
 import com.truesim.effects.weather.render.layout.FieldInputsLayout;
 import com.truesim.effects.weather.render.layout.FieldPush;
 import com.truesim.effects.weather.render.layout.FlashLayout;
+import com.truesim.effects.weather.render.layout.SkyLightPush;
+import com.truesim.effects.atmosphere.render.SkyViewLut;
+import com.truesim.engine.graph.Access;
 import com.truesim.engine.graph.Buffer;
 import com.truesim.engine.graph.BufferAccess;
 import com.truesim.engine.graph.GraphBuilder;
@@ -108,8 +111,38 @@ public final class WeatherGpu implements AutoCloseable {
     private double anchorX;
     private double anchorZ;
     private double time;
+    private double frameSeconds;
+    private final double[] motion = new double[3];
+    private double lastDriftEast = Double.NaN;
+    private double lastDriftNorth;
     private boolean flashLit;
     private double units = 1;
+    private com.truesim.effects.atmosphere.render.Atmosphere tables;
+    private float anvilTop;
+    private double anvilColumn;
+    private double anvilThickness;
+    private boolean rainAny;
+
+    /**
+     * The anvil's mean density at full cover (clouds.slang's anvil profile, smoothstep(0, 0.35, h) times
+     * 1 - smoothstep(0.82, 1, h), under the shape's remap: half its mean, as {@link #meanDensity} has the types').
+     */
+    static final double ANVIL_MEAN_DENSITY = anvilMeanDensity();
+
+    private static double anvilMeanDensity() {
+        double sum = 0;
+        int n = 256;
+        for (int i = 0; i < n; i++) {
+            double h = (i + 0.5) / n;
+            double a = Math.clamp(h / 0.35, 0, 1);
+            double b = Math.clamp((h - 0.82) / 0.18, 0, 1);
+            sum += a * a * (3 - 2 * a) * (1 - b * b * (3 - 2 * b));
+        }
+        return 0.5 * sum / n;
+    }
+    private final double[] skyLight = new double[3];
+    private final double[] sunAbove = new double[3]; // the atmosphere's transmittance to the sun at the clouds, 2 km
+    private boolean skyLightRead;
 
     /**
      * {@code weather}'s maps in {@code textures} (the scene's resources'), drawn with {@code types}' profiles; the
@@ -162,6 +195,43 @@ public final class WeatherGpu implements AutoCloseable {
     /** The Beer shadow map of its clouds (a shared request), ordered after {@code noiseReady}. */
     public CloudShadowMap shadowMap(com.truesim.engine.graph.Buffer noiseReady) {
         return new CloudShadowMap(this, noiseReady, shadowSize, shadowSteps);
+    }
+
+    /**
+     * The sky's illuminance on a horizontal surface at the camera from {@code atmosphere}'s sky-view table (a shared
+     * request: weather/skylight.slang), read back into the next {@link #update}s' sky light: the clouds' ambient and
+     * the light under them, by day and in twilight.
+     */
+    public Request<Buffer> skyLight(com.truesim.effects.atmosphere.render.Atmosphere atmosphere) {
+        return new SkyLight(this, atmosphere);
+    }
+
+    /** {@link #skyLight}: one dispatch of 64 threads and a readback of 16 bytes. */
+    private record SkyLight(WeatherGpu gpu, com.truesim.effects.atmosphere.render.Atmosphere atmosphere)
+        implements Request<Buffer> {
+
+        @Override
+        @AllowAllocation("building the graph, when it changes")
+        public Buffer build(GraphBuilder g) {
+            SkyViewLut.Images sky = g.request(new SkyViewLut(atmosphere));
+            Pipeline program = g.computeProgram("shaders/weather/skylight.spv", "skyLightMain", SkyLightPush.BYTES);
+            SkyLightPush push = new SkyLightPush();
+            Buffer out = g.createBuffer("cloud sky light", 16);
+            int width = sky.skyView().desc().width();
+            int height = sky.skyView().desc().height();
+            g.pass("cloud sky light").read(sky.skyView(), Access.SAMPLED_COMPUTE)
+                .write(out, BufferAccess.STORAGE_WRITE).record(ctx -> ctx.dispatch(program,
+                    push.atmosphere(atmosphere.frameAddress()).output(ctx.address(out))
+                        .skyView(ctx.sampled(sky.skyView())).size(width | height << 16), 1, 1, 1));
+            WeatherGpu w = gpu;
+            g.readback("cloud sky light readback", out, 0, 16, (data, frame) -> {
+                for (int c = 0; c < 3; c++) {
+                    w.skyLight[c] = data.getAtIndex(ValueLayout.JAVA_FLOAT, c);
+                }
+                w.skyLightRead = true;
+            });
+            return out;
+        }
     }
 
     /** The weather maps of the frame, evaluated on the GPU (a shared request); read its buffer to come after them. */
@@ -225,6 +295,25 @@ public final class WeatherGpu implements AutoCloseable {
         return frame.deviceAddress();
     }
 
+    /**
+     * The sky's illuminance on a horizontal surface the last {@link #update} lit the clouds with (scene units, RGB,
+     * into {@code out}): effects-atmosphere's sky integrated over the hemisphere where it lights them, else the
+     * lighting's estimate.
+     */
+    public void skyLight(double[] out) {
+        System.arraycopy(sky, 0, out, 0, 3);
+    }
+
+    /** The weather seconds the last {@link #update}'s frame spans. */
+    public double frameSeconds() {
+        return frameSeconds;
+    }
+
+    /** How far the clouds moved over the last frame (metres, world axis {@code axis}: the wind, their evolution). */
+    public double motion(int axis) {
+        return motion[axis];
+    }
+
     /** The anchor's ground position, x (metres, world). */
     public double anchorX() {
         return anchorX;
@@ -243,6 +332,14 @@ public final class WeatherGpu implements AutoCloseable {
     /** Scene units per cd/m² of this frame's lighting ({@link CloudLighting#units}). */
     public double units() {
         return units;
+    }
+
+    /**
+     * effects-atmosphere's atmosphere lighting the clouds through its tables ({@link CloudLighting#tables}), as the
+     * last {@link #update} was given it, or null. Views built after the first update use it.
+     */
+    public com.truesim.effects.atmosphere.render.Atmosphere tables() {
+        return tables;
     }
 
     /** Whether a flash lit the clouds this frame (the clouds' history gives way to it). */
@@ -269,6 +366,17 @@ public final class WeatherGpu implements AutoCloseable {
      */
     public void update(double now, double frameSeconds, CloudLighting lighting, EngineSettings settings) {
         time = now;
+        this.frameSeconds = frameSeconds;
+        // How far the clouds moved since the frame before: the wind's drift of the noise and the maps, and the
+        // noise's evolution upwards (the clouds' history is read where they were).
+        double driftEast = weather.driftEast();
+        double driftNorth = weather.driftNorth();
+        boolean first = Double.isNaN(lastDriftEast);
+        motion[0] = first ? 0 : driftEast - lastDriftEast;
+        motion[1] = first ? 0 : frameSeconds * settings.get(CloudSettings.EVOLUTION);
+        motion[2] = first ? 0 : -(driftNorth - lastDriftNorth);
+        lastDriftEast = driftEast;
+        lastDriftNorth = driftNorth;
         WeatherConfig config = weather.config();
         // The maps centred on the camera's near-map tile, snapped to their texels so texels keep their ground.
         WeatherGrid near = weather.nearMap();
@@ -279,10 +387,27 @@ public final class WeatherGpu implements AutoCloseable {
         farCentreX = Math.floor(anchorX / farTexel) * farTexel;
         farCentreZ = Math.floor(anchorZ / farTexel) * farTexel;
         float top = writeInputs();
+        float overshoot = settings.get(CloudSettings.ANVIL_OVERSHOOT);
+        if (anvilTop > 0) {
+            top = Math.max(top, anvilTop + overshoot);
+        }
         FrameBuffer f = frame;
 
+        tables = lighting.tables();
         lighting.sun(sun, sunLight);
         lighting.sky(sky);
+        if (tables != null) {
+            tables.transmittance(0, 2, sunAbove);
+        } else {
+            CloudLighting.Atmosphere air = lighting.atmosphere();
+            for (int c = 0; c < 3; c++) {
+                sunAbove[c] = sun[1] > -0.2 ? air.transmittance(c, 2000, sun[1]) : 0;
+            }
+        }
+        if (tables != null && skyLightRead) {
+            // effects-atmosphere's sky integrated over the hemisphere (skyLight), read back a frame or two late.
+            System.arraycopy(skyLight, 0, sky, 0, 3);
+        }
         lighting.horizon(horizon);
         put3(f, CloudFrameLayout.SUN_DIRECTION, sun[0], sun[1], sun[2]);
         f.putFloat(CloudFrameLayout.SUN_VISIBLE, sun[1] > -0.2 ? 1 : 0);
@@ -326,6 +451,25 @@ public final class WeatherGpu implements AutoCloseable {
         f.putFloat(CloudFrameLayout.RAIN_MAX_RATE, (float) config.maxPrecipitationRate());
         f.putFloat(CloudFrameLayout.RAIN_FORWARD, settings.get(CloudSettings.RAIN_FORWARD));
         f.putFloat(CloudFrameLayout.RAIN_EXTINCTION_SCALE, settings.get(CloudSettings.RAIN_EXTINCTION));
+        f.putFloat(CloudFrameLayout.RAIN_SLANT, settings.get(CloudSettings.RAIN_SLANT));
+        f.putFloat(CloudFrameLayout.RAIN_CURVE, settings.get(CloudSettings.RAIN_CURVE));
+        f.putFloat(CloudFrameLayout.RAIN_EVAPORATION, settings.get(CloudSettings.RAIN_EVAPORATION));
+        f.putFloat(CloudFrameLayout.RAIN_TAPER, settings.get(CloudSettings.RAIN_TAPER));
+        f.putInt(CloudFrameLayout.RAIN_ANY, rainAny ? 1 : 0);
+        f.putFloat(CloudFrameLayout.BILLOW_SCALE, settings.get(CloudSettings.BILLOW_SCALE));
+        // The anvils: ice of the settings' water content and crystal size, sigma = 3 IWC / (2 rho_ice r_eff), over
+        // the anvil profile's mean density at full cover (as the types' extinction at density 1 is).
+        double diameter = settings.get(CloudSettings.ANVIL_DIAMETER);
+        double ice = 3 * settings.get(CloudSettings.ANVIL_ICE) * 1e-3 / (2 * 917.0 * diameter * 0.5e-6);
+        float thickness = anvilTop > 0 ? settings.get(CloudSettings.ANVIL_THICKNESS) : 0;
+        f.putFloat(CloudFrameLayout.ANVIL_TOP, anvilTop);
+        f.putFloat(CloudFrameLayout.ANVIL_THICKNESS, thickness);
+        f.putFloat(CloudFrameLayout.ANVIL_EXTINCTION, (float) (ice / ANVIL_MEAN_DENSITY));
+        f.putFloat(CloudFrameLayout.ANVIL_COLUMN, (float) ice);
+        anvilColumn = ice;
+        anvilThickness = thickness;
+        f.putFloat(CloudFrameLayout.ANVIL_OVERSHOOT, overshoot);
+        f.putFloat(CloudFrameLayout.ANVIL_DIAMETER, (float) diameter);
 
         // The noise: carried by the same wind as the coverage, evolving upwards through the layers.
         double shapePeriod = settings.get(CloudSettings.SHAPE_PERIOD);
@@ -489,6 +633,8 @@ public final class WeatherGpu implements AutoCloseable {
             : types.profile(state.from().cloudType()).top(), types.profile(state.target().cloudType()).top()));
         StormSimulation storms = weather.storms();
         int cells = 0;
+        float anvils = 0;
+        boolean rain = state.precipitation() > 0;
         // A cell becomes a cumulonimbus over MATURING seconds of the weather's time, not at once.
         double dt = Double.isNaN(matureTime) ? 0 : Math.max(0, time - matureTime);
         matureTime = time;
@@ -520,10 +666,15 @@ public final class WeatherGpu implements AutoCloseable {
                 in.putFloat(o + FieldCellLayout.ANVIL_CENTRE + 4, (float) (storms.anvilPosition(s, 2) - anchorZ));
                 in.putFloat(o + FieldCellLayout.ANVIL_RADIUS, (float) (storms.anvilRadius(s) * storms.anvil(s)));
                 top = Math.max(top, (float) storms.top(s));
+                if (storms.anvil(s) > 0) {
+                    anvils = Math.max(anvils, (float) storms.top(s));
+                }
+                rain |= storms.precipitation(s) > 0;
                 cells++;
             }
         }
         in.putInt(FieldInputsLayout.CELLS, cells);
+        anvilTop = anvils;
         Brushes brushes = weather.brushes();
         int count = Math.min(brushes.count(), MAX_BRUSHES);
         for (int i = 0; i < count; i++) {
@@ -539,17 +690,23 @@ public final class WeatherGpu implements AutoCloseable {
             in.putFloat(o + FieldBrushLayout.TYPE, b.cloudType().channelValue());
             in.putFloat(o + FieldBrushLayout.TOP, (float) b.topHeight());
             in.putInt(o + FieldBrushLayout.MODE, b.mode().ordinal());
+            rain |= b.mode() != WeatherBrush.Mode.CLEAR && b.precipitation() > 0;
             if (b.mode() != WeatherBrush.Mode.CLEAR) {
                 top = (float) Math.max(top, Math.max(b.topHeight(), types.profile(b.cloudType()).top()));
             }
         }
         in.putInt(FieldInputsLayout.BRUSHES, count);
+        rainAny = rain;
         return top;
     }
 
     /** The optical depth of a column of {@code type} at {@code coverage} under a top channel of {@code top}. */
     private double column(CloudType type, double coverage, double top) {
         CloudProfile p = types.profile(type);
+        if (type == CloudType.CIRRUS && anvilTop > 0 && top > p.top() + 500) {
+            // The field's anvil (gameplay's cirrus under a storm's top): the anvil's ice, as the clouds draw it.
+            return coverage * anvilColumn * anvilThickness;
+        }
         double thickness = (top > p.base() + 100 ? top : p.top()) - p.base();
         return coverage * p.extinction() * thickness;
     }
@@ -605,7 +762,7 @@ public final class WeatherGpu implements AutoCloseable {
         diffuse /= n;
         double mu = Math.max(sun[1], 0);
         for (int c = 0; c < 3; c++) {
-            out[c] = sky[c] * (1 - cover) + (sunLight[c] * mu + sky[c]) * diffuse;
+            out[c] = sky[c] * (1 - cover) + (sunLight[c] * sunAbove[c] * mu + sky[c]) * diffuse;
         }
     }
 

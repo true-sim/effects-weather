@@ -67,6 +67,33 @@ public final class CloudSettings {
     /** Multiplies the rain's Marshall-Palmer extinction. */
     public static final Setting<Float> RAIN_EXTINCTION = Setting.decimal("render.rain.extinction", 1, 0, 16,
         "multiplies the rain shafts' extinction from Marshall-Palmer drops (1 physical)");
+    /** Metres downwind the rain falls per metre: the wind's shear over the drops' fall speed. */
+    public static final Setting<Float> RAIN_SLANT = Setting.decimal("render.rain.slant", 0.25f, 0, 4,
+        "metres downwind rain shafts slant per metre fallen (the wind's shear over the drops' fall speed)");
+    /** More slant towards the ground: the shaft curves. */
+    public static final Setting<Float> RAIN_CURVE = Setting.decimal("render.rain.curve", 0.35f, 0, 4,
+        "how much more rain shafts slant towards the ground (they curve downwind), per fallen fraction of the base");
+    /** The fraction of the rain evaporated before it reaches the ground. */
+    public static final Setting<Float> RAIN_EVAPORATION = Setting.decimal("render.rain.evaporation", 0.35f, 0, 1,
+        "the fraction of the rain that evaporates before reaching the ground (shafts thin downwards)");
+    /** How much of the shaft's edge evaporates before the ground. */
+    public static final Setting<Float> RAIN_TAPER = Setting.decimal("render.rain.taper", 0.3f, 0, 0.9f,
+        "how much of a rain shaft's lighter edge evaporates before the ground (shafts narrow downwards)");
+    /** The towers' turrets, times the base shape's frequency. */
+    public static final Setting<Float> BILLOW_SCALE = Setting.decimal("render.clouds.billowScale", 2.5f, 0, 16,
+        "the frequency of towering clouds' billows (turrets), times the base shape's (0: none)");
+    /** The anvils' ice water content, g/m³. */
+    public static final Setting<Float> ANVIL_ICE = Setting.decimal("render.clouds.anvil.ice", 0.25f, 0, 2,
+        "grams of ice per cubic metre in thunderstorm anvils (tenths near the core: optical depths of tens)");
+    /** The anvils' crystals' effective diameter, µm. */
+    public static final Setting<Float> ANVIL_DIAMETER = Setting.decimal("render.clouds.anvil.diameter", 60, 10, 500,
+        "the effective diameter of thunderstorm anvils' ice crystals, micrometres");
+    /** An anvil's depth at full cover, metres. */
+    public static final Setting<Float> ANVIL_THICKNESS = Setting.decimal("render.clouds.anvil.thickness", 2500, 0,
+        6000, "metres deep a thunderstorm's anvil is where it covers fully (0: no anvils)");
+    /** The overshooting dome over an updraft core, metres above the anvil. */
+    public static final Setting<Float> ANVIL_OVERSHOOT = Setting.decimal("render.clouds.anvil.overshoot", 1200, 0,
+        5000, "metres the overshooting top of a storm's updraft rises above its anvil");
     /** A median flash's first stroke's peak luminous intensity, candela. */
     public static final Setting<Float> FLASH_INTENSITY = Setting.decimal("render.lightning.intensity", 2.0e10f, 0, 1e13f,
         "the peak luminous intensity of a median flash's first stroke, candela (scaled by each flash's current)");
@@ -93,7 +120,9 @@ public final class CloudSettings {
     /** Every one, for registering. */
     public static final List<Setting<?>> ALL = List.of(SHAPE_PERIOD, DETAIL_PERIOD, CURL_PERIOD, CURL_STRENGTH,
         DETAIL_STRENGTH, EVOLUTION, OCTAVES, MS_SCATTERING, MS_EXTINCTION, MS_PHASE, AMBIENT_DEPTH, GROUND_ALBEDO,
-        DENSITY_SCALE, COVERAGE_OFFSET, POWDER, RAIN_FORWARD, RAIN_EXTINCTION, FLASH_INTENSITY, FLASH_RADIUS,
+        DENSITY_SCALE, COVERAGE_OFFSET, POWDER, RAIN_FORWARD, RAIN_EXTINCTION, RAIN_SLANT, RAIN_CURVE,
+        RAIN_EVAPORATION, RAIN_TAPER, BILLOW_SCALE, ANVIL_ICE, ANVIL_DIAMETER, ANVIL_THICKNESS, ANVIL_OVERSHOOT,
+        FLASH_INTENSITY, FLASH_RADIUS,
         FLASH_LEAK, FLASHES, SHADOW_SIZE, SHADOW_EXTENT, SHADOW_STEPS);
 
     private CloudSettings() {

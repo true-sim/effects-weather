@@ -20,6 +20,7 @@ import com.truesim.effects.weather.WeatherDomain;
 import com.truesim.effects.weather.WeatherPreset;
 import com.truesim.effects.weather.clouds.CloudTypes;
 import com.truesim.effects.weather.clouds.CloudsConfig;
+import com.truesim.effects.weather.render.layout.GradePush;
 import com.truesim.engine.graph.Access;
 import com.truesim.engine.graph.Anchor;
 import com.truesim.engine.graph.ExternalImage;
@@ -29,10 +30,13 @@ import com.truesim.engine.graph.Key;
 import com.truesim.engine.graph.Order;
 import com.truesim.engine.graph.Technique;
 import com.truesim.engine.graph.ViewPort;
+import com.truesim.common.graph.Id;
+import com.truesim.engine.render.DisplayTransform;
+import com.truesim.engine.vulkan.DisplayEncoding;
+import com.truesim.engine.vulkan.Pipeline;
 import com.truesim.effects.atmosphere.render.AerialPerspective;
 import com.truesim.effects.atmosphere.render.Atmosphere;
 import com.truesim.effects.atmosphere.render.AtmosphereSky;
-import com.truesim.effects.atmosphere.render.SkyCapture;
 import com.truesim.engine.render.Camera;
 import com.truesim.engine.render.ClusteredForwardShading;
 import com.truesim.engine.render.ClusteredLights;
@@ -67,10 +71,13 @@ import java.util.List;
 import org.lwjgl.vulkan.VkBufferImageCopy;
 
 /**
- * A weather scene for the tests, screenshots and benchmarks: a flat ground (a large grey quad), the sun as a scene
- * node's directional light (lux at the ground) placed by {@link LightSync}, a weather of the given quality and preset,
- * its GPU side, a camera, forward shading with the light clusters, the clouds ({@link Clouds}), the clouds' shadow on
- * the ground ({@link CloudShadowMask}), and the scene's colour (RGBA16F, physical units) read back after each frame.
+ * A weather scene for the tests, screenshots and benchmarks: a flat ground (a large quad of grassland's albedo, 0.2,
+ * green-brown), the sun as a scene node's directional light (lux at the ground) placed by {@link LightSync}, a weather
+ * of the given quality and preset, its GPU side, a camera, forward shading with the light clusters, the clouds
+ * ({@link Clouds}), the clouds' shadow on the ground ({@link CloudShadowMask}), and the scene's colour (RGBA16F,
+ * physical or the atmosphere's scene units) read back after each frame; and what a display shows of it: white balanced
+ * as a camera set to the daylight ({@link #whiteBalance}), then the engine's display transform (engine 0.193.0:
+ * {@code display.toneCurve} AgX, {@code display.exposure}, sRGB, dithered) read back.
  */
 final class CloudScene implements AutoCloseable {
 
@@ -96,9 +103,15 @@ final class CloudScene implements AutoCloseable {
     final Atmosphere atmosphere;
     final CloudLighting sky;
     private final double[] at = new double[3];
-    private final double[] clear = new double[3];
     final int groundMaterial;
     private final GpuBuffer pixels;
+    private final GpuBuffer shown;
+    /** The white balance applied before the display transform (per channel). */
+    final float[] gains = {1, 1, 1};
+    /** The display transform's output, the view's (sRGB-encoded values in [0, 1]). */
+    static final Key<Image> DISPLAY = Key.image("test.display");
+    /** The ground's albedo: grassland's, about 0.2, green-brown. */
+    static final Color GROUND = new Color(0.20f, 0.22f, 0.12f, 1);
     private double time;
     LightningLights flashLights;
 
@@ -107,9 +120,9 @@ final class CloudScene implements AutoCloseable {
     }
 
     /**
-     * With {@code atmosphere}, effects-atmosphere's sky, aerial perspective and sky capture (the environment, dimmed
-     * by the clouds), its exposure in its scene units (EV100: {@link #ev100}); else the analytic test sky in physical
-     * units.
+     * With {@code atmosphere}, effects-atmosphere's sky and aerial perspective, its exposure in its scene units
+     * (EV100: {@link #ev100}); else the analytic test sky in physical units. The environment either way: the sky's
+     * light under the clouds ({@link WeatherGpu#skyBelowClouds}), uniform.
      */
     CloudScene(int width, int height, WeatherConfig config, Quality quality, WeatherPreset preset,
         boolean shadowMask, boolean atmosphere) {
@@ -142,9 +155,9 @@ final class CloudScene implements AutoCloseable {
 
         int ground = pool.add(quad());
         groundMaterial = materials.add(new Material(MetallicRoughnessParameters.DEFAULTS
-            .withBaseColor(new Color(0.25f, 0.25f, 0.25f, 1)).withRoughness(1)));
+            .withBaseColor(GROUND).withRoughness(1)));
         int grey = groundMaterial;
-        // The ground: the quad (z = 0, facing +z) laid flat, 400 km across.
+        // The ground: the grid (facing +z) laid flat, 400 km across, curving down with the planet.
         float s = (float) Math.sqrt(0.5);
         scene.set(0, ground, grey, 0, 0, 0, -s, 0, 0, s, 200_000, 200_000, 1);
 
@@ -155,6 +168,8 @@ final class CloudScene implements AutoCloseable {
         ExternalImage output = new ExternalImage("target", width, height, Format.R16G16B16A16_SFLOAT, usage,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL).set(target.handle(), target.view());
         pixels = gpu.own(GpuBuffer.hostVisible(gpu.device, 8L * width * height, VK_BUFFER_USAGE_TRANSFER_DST_BIT));
+        shown = gpu.own(GpuBuffer.hostVisible(gpu.device, 8L * width * height, VK_BUFFER_USAGE_TRANSFER_DST_BIT));
+        DisplayTransform.curve(settings, DisplayTransform.Curve.AGX);
         camera = new Camera();
         look(0, 2, 0, 0, 0.3, -1, Math.toRadians(70));
         SceneGeometry geometry = SceneGeometry.meshlets(renderer);
@@ -169,13 +184,14 @@ final class CloudScene implements AutoCloseable {
         environment = Environment.uniform("sky under the clouds", 0, 0, 0);
         port.add(new EnvironmentLighting(environment, view));
         if (atmosphere) {
-            port.add(new SkyCapture(this.atmosphere, environment, textures)).add(new AtmosphereSky(this.atmosphere, view))
+            port.add(new AtmosphereSky(this.atmosphere, view))
                 .add(new AerialPerspective(this.atmosphere, view));
         } else {
             port.add(new TestSky(clouds, view, below));
         }
-        port.add(new Clouds(clouds, view)).add(bolts.view(view))
-            .add(new Capture(pixels, width, height)).output(Keys.SCENE_COLOR, output);
+        port.add(new Clouds(clouds, view)).add(bolts.view(view)).add(new Capture(pixels, width, height))
+            .add(new WhiteBalance(gains)).add(new Last(new DisplayTransform().transform(Keys.SCENE_COLOR, DISPLAY,
+                DisplayEncoding.SDR_UNORM))).add(new CaptureDisplay(shown, width, height)).output(DISPLAY, output);
         weather.refreshAll();
     }
 
@@ -291,15 +307,10 @@ final class CloudScene implements AutoCloseable {
             bolts.update();
             // The ground's light from the sky under the clouds (the environment's), and the air's under them.
             clouds.skyBelowClouds(camera.position(0), camera.position(2), 10_000, below);
-            if (atmosphere != null) {
-                // The captured clear sky, dimmed by the clouds as much as their diffused light is below it.
-                sky.sky(clear);
-                double ratio = (below[0] + below[1] + below[2]) / Math.max(clear[0] + clear[1] + clear[2], 1e-30);
-                environment.intensity((float) Math.clamp(ratio, 0, 4));
-            } else {
-                environment.setColor((float) (below[0] / Math.PI), (float) (below[1] / Math.PI),
-                    (float) (below[2] / Math.PI));
-            }
+            // A uniform sky of that irradiance: the clear sky's colour where it is clear, the clouds' grey light diffused
+            // through them where they cover (a captured clear sky only dimmed would light shade under clouds blue).
+            environment.setColor((float) (below[0] / Math.PI), (float) (below[1] / Math.PI),
+                (float) (below[2] / Math.PI));
             if (flashLights != null) {
                 flashLights.update(clouds);
                 nodes.update();
@@ -323,6 +334,30 @@ final class CloudScene implements AutoCloseable {
         return rgb;
     }
 
+    /**
+     * What the display shows of the last frame: sRGB-encoded values in [0, 1], RGB floats row by row (the display
+     * transform's, after the white balance in {@link #gains} and {@code display.exposure}).
+     */
+    float[] shown() {
+        float[] rgb = new float[3 * width * height];
+        var memory = shown.memory();
+        for (int i = 0; i < width * height; i++) {
+            for (int c = 0; c < 3; c++) {
+                rgb[3 * i + c] = Float.float16ToFloat(memory.getAtIndex(ValueLayout.JAVA_SHORT, 4L * i + c));
+            }
+        }
+        return rgb;
+    }
+
+    /** Sets the white balance before the display transform to {@link #whiteBalance()} (none when it is null). */
+    CloudScene balance() {
+        double[] g = whiteBalance();
+        for (int c = 0; c < 3; c++) {
+            gains[c] = g == null || !(g[c] > 0 && g[c] < 100) ? 1 : (float) g[c];
+        }
+        return this;
+    }
+
     /** The luminance of pixel (x, y) of {@code rgb} (cd/m²). */
     float luminance(float[] rgb, int x, int y) {
         int o = 3 * (y * width + x);
@@ -334,16 +369,180 @@ final class CloudScene implements AutoCloseable {
         gpu.close();
     }
 
-    /** A 2 x 2 quad in z = 0 facing +z. */
+    /**
+     * The ground: a 2 x 2 grid in x, y (scaled to 400 km by the instance) facing +z, its z the planet's surface below
+     * the plane tangent at the origin, in metres (the instance leaves z unscaled): -d^2 / 2R at d metres out. The clouds
+     * and effects-atmosphere's sky lie on the planet; a flat ground showed beyond the true horizon, under the decks
+     * curving down to it.
+     */
     private static MeshData quad() {
-        float[] positions = {-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0};
-        float[] normals = {0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1};
-        return new MeshBuilder(VertexFormat.of(VertexAttribute.NORMAL), 4).positions(positions)
-            .attribute(VertexAttribute.NORMAL, normals).submesh(new int[] {0, 1, 2, 0, 2, 3}).buildFlat();
+        int n = 64;
+        double radius = 6.36e6;
+        float[] positions = new float[3 * (n + 1) * (n + 1)];
+        float[] normals = new float[positions.length];
+        for (int j = 0; j <= n; j++) {
+            for (int i = 0; i <= n; i++) {
+                int o = 3 * (j * (n + 1) + i);
+                double x = 2.0 * i / n - 1;
+                double y = 2.0 * j / n - 1;
+                double d = 200_000 * Math.hypot(x, y);
+                positions[o] = (float) x;
+                positions[o + 1] = (float) y;
+                positions[o + 2] = (float) (-d * d / (2 * radius));
+                normals[o + 2] = 1;
+            }
+        }
+        int[] indices = new int[6 * n * n];
+        int k = 0;
+        for (int j = 0; j < n; j++) {
+            for (int i = 0; i < n; i++) {
+                int a = j * (n + 1) + i;
+                int b = a + 1;
+                int c = a + n + 1;
+                int e = c + 1;
+                indices[k++] = a;
+                indices[k++] = b;
+                indices[k++] = e;
+                indices[k++] = a;
+                indices[k++] = e;
+                indices[k++] = c;
+            }
+        }
+        return new MeshBuilder(VertexFormat.of(VertexAttribute.NORMAL), (n + 1) * (n + 1)).positions(positions)
+            .attribute(VertexAttribute.NORMAL, normals).submesh(indices).buildFlat();
+    }
+
+    /** The id of {@link Capture}. */
+    private static final Id<Capture> CAPTURE = Id.of("test.capture", Capture.class);
+
+    /** A camera's white balance: the scene's colour times {@code gains}, after the capture of its physical values. */
+    private record WhiteBalance(float[] gains) implements Technique {
+        @Override
+        public Id<WhiteBalance> id() {
+            return BALANCE;
+        }
+
+        @Override
+        public List<Key<?>> provides() {
+            return List.of();
+        }
+
+        @Override
+        public List<Key<?>> modifies() {
+            return List.of(Keys.SCENE_COLOR);
+        }
+
+        @Override
+        public Order order() {
+            return Order.at(Anchor.POST).after(CAPTURE);
+        }
+
+        @Override
+        public void build(GraphBuilder g) {
+            Image color = g.modify(Keys.SCENE_COLOR);
+            Pipeline program = g.computeProgram("shaders/test/grade.spv", "gradeMain", GradePush.BYTES);
+            GradePush push = new GradePush();
+            g.pass("white balance").write(color, Access.STORAGE_WRITE).record(ctx -> {
+                int w = ctx.regionWidth(color);
+                int h = ctx.regionHeight(color);
+                ctx.dispatch(program, push.color(ctx.storage(color)).size(w | h << 16).gains(gains[0], gains[1],
+                    gains[2]), (w + 7) / 8, (h + 7) / 8, 1);
+            });
+            g.provide(Keys.SCENE_COLOR, color);
+        }
+    }
+
+    /** The id of {@link WhiteBalance}. */
+    private static final Id<WhiteBalance> BALANCE = Id.of("test.whiteBalance", WhiteBalance.class);
+
+    /** The id of {@link Last}. */
+    private static final Id<Last> LAST = Id.of("test.display", Last.class);
+
+    /** {@code inner} (the display transform) after everything else in the view: after the white balance. */
+    private record Last(Technique inner) implements Technique {
+        @Override
+        public Id<Last> id() {
+            return LAST;
+        }
+
+        @Override
+        public List<Key<?>> provides() {
+            return inner.provides();
+        }
+
+        @Override
+        public List<Key<?>> reads() {
+            return inner.reads();
+        }
+
+        @Override
+        public List<Key<?>> modifies() {
+            return inner.modifies();
+        }
+
+        @Override
+        public Order order() {
+            return Order.at(Anchor.POST).after(BALANCE);
+        }
+
+        @Override
+        public void build(GraphBuilder g) {
+            inner.build(g);
+        }
+    }
+
+    /** Copies what the display transform made into {@code pixels}. */
+    private record CaptureDisplay(GpuBuffer pixels, int width, int height) implements Technique {
+        @Override
+        public Order order() {
+            return Order.at(Anchor.POST).after(LAST);
+        }
+
+        @Override
+        public List<Key<?>> provides() {
+            return List.of();
+        }
+
+        @Override
+        public List<Key<?>> modifies() {
+            return List.of(DISPLAY);
+        }
+
+        @Override
+        public void build(GraphBuilder g) {
+            Image color = g.modify(DISPLAY);
+            copy(g, "capture display", color, pixels, width, height);
+            g.provide(DISPLAY, color);
+        }
+    }
+
+    /** A pass copying {@code color} into {@code pixels} (after the frame before's copy). */
+    private static void copy(GraphBuilder g, String name, Image color, GpuBuffer pixels, int width, int height) {
+        g.pass(name).read(color, Access.TRANSFER_SRC).sideEffects().record(ctx -> {
+            // The frame before copied into the same host buffer: its write first.
+            com.truesim.engine.vulkan.Barriers.memory(ctx.unsafe().commands(),
+                org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            try (var stack = stackPush()) {
+                VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
+                region.bufferRowLength(width).imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                    .layerCount(1);
+                region.imageExtent().set(width, height, 1);
+                org.lwjgl.vulkan.VK10.vkCmdCopyImageToBuffer(ctx.unsafe().commands(), ctx.unsafe().image(color),
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, pixels.handle(), region);
+            }
+        });
     }
 
     /** Copies the scene's colour into {@code pixels} after everything drawn over it. */
     private record Capture(GpuBuffer pixels, int width, int height) implements Technique {
+        @Override
+        public Id<Capture> id() {
+            return CAPTURE;
+        }
+
         @Override
         public List<Key<?>> provides() {
             return List.of();
@@ -362,22 +561,7 @@ final class CloudScene implements AutoCloseable {
         @Override
         public void build(GraphBuilder g) {
             Image color = g.modify(Keys.SCENE_COLOR);
-            g.pass("capture").read(color, Access.TRANSFER_SRC).sideEffects().record(ctx -> {
-                // The frame before copied into the same host buffer: its write first.
-                com.truesim.engine.vulkan.Barriers.memory(ctx.unsafe().commands(),
-                    org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                try (var stack = stackPush()) {
-                    VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
-                    region.bufferRowLength(width).imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
-                        .layerCount(1);
-                    region.imageExtent().set(width, height, 1);
-                    org.lwjgl.vulkan.VK10.vkCmdCopyImageToBuffer(ctx.unsafe().commands(), ctx.unsafe().image(color),
-                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, pixels.handle(), region);
-                }
-            });
+            copy(g, "capture", color, pixels, width, height);
             g.provide(Keys.SCENE_COLOR, color);
         }
     }
