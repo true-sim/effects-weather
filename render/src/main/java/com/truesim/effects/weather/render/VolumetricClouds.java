@@ -67,6 +67,21 @@ final class VolumetricClouds implements Technique {
         this.config = config;
     }
 
+    /**
+     * The interleave this frame: the setting's, but every pixel while a flash lights the clouds (they answer within the
+     * frame) and when a frame spans so much weather time that the history counts for less than half (a time-lapse:
+     * the pixels not marched would show the blocks' spatial estimate).
+     */
+    private int interleave(Clouds.March c) {
+        if (!c.temporal() || gpu.flashLit()) {
+            return 1;
+        }
+        if (c.historySeconds() > 0 && Maths.exp(-gpu.frameSeconds() / c.historySeconds()) < 0.5) {
+            return 1;
+        }
+        return Math.max(1, c.interleave());
+    }
+
     /** Bayer orders of the interleave's blocks: each pixel of a 2 x 2 or 4 x 4 block once, spread out in time. */
     private static final int[] BAYER2 = {0, 3, 1, 2};
     private static final int[] BAYER4 = {0, 10, 2, 8, 5, 15, 7, 13, 1, 11, 3, 9, 4, 14, 6, 12};
@@ -158,7 +173,7 @@ final class VolumetricClouds implements Technique {
                     marchPush.atmosphere(sky != null ? atmosphere.frameAddress() : 0)
                         .aerial(NO_AERIAL | NO_AERIAL << 16).apFar(1);
                 }
-                int s = c.temporal() && !gpu.flashLit() ? Math.max(1, c.interleave()) : 1; // a flash: every pixel
+                int s = interleave(c);
                 int sparse = s | phase(s, ctx.frame());
                 ctx.dispatch(marchProgram, marchPush.view(view.view().address()).frame(gpu.address())
                     .outputs(ctx.storage(march) | ctx.storage(marchDepth) << 16).depth(ctx.sampled(depth))
@@ -182,7 +197,7 @@ final class VolumetricClouds implements Technique {
                 int w = Math.min(width, (ctx.regionWidth(color) + resolution - 1) / resolution);
                 int h = Math.min(height, (ctx.regionHeight(color) + resolution - 1) / resolution);
                 boolean valid = c.temporal() && ctx.historyValid(history);
-                int s = c.temporal() && !gpu.flashLit() ? Math.max(1, c.interleave()) : 1; // a flash: every pixel
+                int s = interleave(c);
                 int sparse = s | phase(s, ctx.frame());
                 // The history counts for less the more weather time the frame spans (the shapes evolve): a
                 // time-lapse keeps sharp clouds instead of streaks.

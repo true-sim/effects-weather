@@ -114,48 +114,6 @@ class CloudShots {
     }
 
     @Test
-    void quick() {
-        assumeThat(wanted()).isTrue();
-        String only = System.getenv("TRUESIM_QUICK");
-        if (only == null || only.contains("fair")) {
-            try (CloudScene s = scene(W, H, WeatherPreset.SCATTERED)) {
-                s.sun(38, 200).look(0, 2, 0, -0.3, 0.22, -1, Math.toRadians(70));
-                shot(s, "quick-fair", 32);
-            }
-        }
-        if (only == null || only.contains("climb")) {
-            try (CloudScene s = scene(W, H, WeatherPreset.BROKEN)) {
-                s.weather.addBrush(WeatherBrush.set(30_000, CloudType.STRATOCUMULUS, 0.95, 0), 0, 0, -20_000);
-                s.sun(35, 160).look(0, 200, 0, 0, 0.12, -1, Math.toRadians(75));
-                shot(s, "quick-climb", 32);
-            }
-        }
-        if (only == null || only.contains("dusk")) {
-            dusk();
-        }
-        if (only == null || only.contains("anvil")) {
-            anvils();
-        }
-        if (only == null || only.contains("rain")) {
-            try (CloudScene s = scene(W, H, WeatherPreset.FAIR)) {
-                s.weather.spawnStorm(-22_000, 0, -12_000);
-                run(s, 22, 0, 2, 0);
-                s.sun(25, 120).look(0, 2, 0, -0.6, 0.12, -1, Math.toRadians(70));
-                shot(s, "quick-rain", 32);
-            }
-        }
-        if (only == null || only.contains("storm")) {
-            try (CloudScene s = scene(W, H, WeatherPreset.STORM)) {
-                storm(s);
-                s.sun(30, 120).look(0, 2, 0, -1, 0.3, 0.15, Math.toRadians(75));
-                shot(s, "quick-storm", 32);
-                s.sun(-8, 120);
-                shot(s, "quick-storm-dusk", 24);
-            }
-        }
-    }
-
-    @Test
     void stills() {
         assumeThat(wanted()).isTrue();
         try (CloudScene s = scene(W, H, WeatherPreset.SCATTERED)) {
@@ -329,16 +287,23 @@ class CloudShots {
         }
     }
 
-    /** Rain shafts under a storm cell moving past: 20 s, 3 s of weather a frame. */
+    /**
+     * Rain shafts under a storm cell carried past by the westerlies: 30 min of weather in 20 s (3 s a frame), the camera
+     * turned to keep the cell in view, from 21 km west-northwest to its north.
+     */
     @Test
     void rainShafts() throws Exception {
         assumeThat(wanted()).isTrue();
         try (CloudScene s = scene(W, H, WeatherPreset.FAIR)) {
             s.flashLights(4);
-            s.weather.spawnStorm(-22_000, 0, -12_000);
-            run(s, 22, 0, 2, 0);
-            s.sun(25, 120).look(0, 2, 0, -0.6, 0.12, -1, Math.toRadians(70));
-            film(s, "film-rain", 600, 3, 3, 0, f -> { });
+            s.weather.spawnStorm(-45_000, 0, -16_000);
+            run(s, 25, 0, 2, 0);
+            s.sun(25, 120);
+            film(s, "film-rain", 600, 3, 3, 0, f -> {
+                double[] c = cell(s);
+                double d = Math.hypot(c[0], c[1]);
+                s.look(0, 2, 0, c[0] / d, 0.14, c[1] / d, Math.toRadians(70));
+            });
         }
     }
 

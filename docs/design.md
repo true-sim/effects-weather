@@ -262,7 +262,26 @@ Six fixes, each measured (tests that fail on the first round's code: run on its 
 - **Time-lapse films**: the history was reprojected by the camera alone while the clouds moved with the wind (tens of
   metres a frame in a film of seconds a frame: streaks). The temporal pass now reads the history where the clouds were
   (`WeatherGpu.motion`: the wind's drift and the noise's evolution over the frame), and the history fades with the
-  weather time a frame spans (`historySeconds` 4: `blend · exp(−dt / 4 s)`, nothing at 60 Hz).
+  weather time a frame spans (`historySeconds` 4: `blend · exp(−dt / 4 s)`, nothing at 60 Hz). A frame spanning so much
+  weather that the history counts for less than half marches every pixel (no interleave: its pixels not marched
+  would show the blocks' spatial estimate as stair-steps).
+- **The cumulus to cumulonimbus film** (the first round's `typeTransitions`): the cell did not vanish; it was spawned
+  14 km west of a camera looking west and the westerlies (14 m/s) carried it over the camera and out of the top of the
+  frame within 18 minutes. `CloudShots.cumulusToCumulonimbus` spawns it 38 km west-northwest and turns the camera to
+  keep it in view (its log prints the cell's place, top, anvil and type a frame: from 38 km to 13 km, towering cumulus
+  to cumulonimbus at 16 minutes, the anvil spreading from 22). The ground "flipping between grey and navy": the shade
+  under the clouds was lit by the captured clear sky only dimmed (navy); now the sky's light under the clouds,
+  uniform. In the time-lapse (6 s of weather a frame) the ground's large changes are cloud shadows moving 84 m a
+  frame across a view a hundred metres wide from 30 m (`film-transition-ground`); in real time
+  (`CloudShots.groundRealTime`, a mature storm and fair cumulus, 30 frames a second) the ground changes 0.0018 a
+  frame (of 1, sRGB) everywhere, the display transform's dither, with no block pops, on the first round's code and
+  this one alike: no noise or flicker of the shadow mask or the light.
+- **Not done, or still wrong**: the voxel cache and empty-space skipping (#8); the interleave of 4 brings little;
+  flying through a layer costs 1.59 ms layered (above 1.5); a thin dotted row of pixels right at the horizon from the
+  half-resolution march straddling it; the anvil spreads over 20 minutes, so a 30-minute film ends with it half grown,
+  and a cell's tower (a 2.7 km core radius) looks slender from 25 km; low-sun daytime clouds look flatter than the
+  first round's (the sky light is now the sky's real one, larger than the old estimate at low sun; not compared with
+  a path tracer, #10); the 2D tier keeps the analytic atmosphere and draws no anvils.
 - **Cost** ([#8](https://github.com/true-sim/effects-weather/issues/8)): a dynamically indexed local array (the nine
   type weights) lived in scratch memory; it is indexed by constants now. And settings of the march's kind
   (`render.clouds.<kind>.*`), each measured against the reference (`CloudFixesTest.theCheaperMarchConvergesToThe
