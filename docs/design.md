@@ -95,6 +95,118 @@ so every way of shading (forward, the visibility buffer, transparency, ray and p
   on, how long it has been covered. Updated by a compute pass each frame from the columns (weather/snowmap.slang).
 - Part 2 (snow depth deformed by wheels and feet) waits for the engine's per-material displacement.
 
+### weather-render (branch `clouds-render`)
+
+The render techniques, on engine 0.192.0, using only its generic features (technique registry, frame graph, dynamic
+textures, the shadow table's screen-space masks, the scene's lights). Flat worlds; a planet's maps are not drawn yet.
+
+- **`WeatherGpu`**: a world's weather on the GPU. The near and far maps are `WeatherField` evaluated on the GPU every
+  frame (field.slang, from the field's small inputs: the preset in effect, the wind's offset, the storm cells, the
+  brushes; `WeatherMapGpuTest`: every texel within 0.0044 of the CPU's field at the frame's time). The CPU's maps,
+  refreshed a few tiles a step, stay the gameplay's: uploaded to the GPU they showed anything moving (cells, the wind's
+  drift) as seams at tile boundaries, and types popping as tiles came in. Each texel holds a mix of two cloud types and
+  the second's weight, continuous wherever the weather changes continuously: a preset transition's types blend by its
+  smoothstep (the CPU switches halfway), a storm cell becomes a cumulonimbus over 3 minutes and takes over from the
+  preset's type as its core outgrows the preset's cover, brushes by their falloff. The clouds add the four texels'
+  mixes around a point and blend the two heaviest types' densities, layers and droplets, and the near map hands over
+  to the far one across its outer tenth. The profile atlas (`CloudTypes.bakeProfileAtlas`); and the frame's
+  `CloudFrame` record (clouds.slang): the maps' placement around an anchor (the near map's centre on the ground, so GPU
+  positions stay small), the types' layers and microphysics (art applied), the noise's placement carried by the same
+  wind as the coverage, the sun and sky, the atmosphere, the lighting tunables and the flashes lit this frame.
+- **`CloudNoise`**: the noise volumes generated once by compute (generate.slang), a port of `CloudNoise` operation for
+  operation; `CloudNoiseGpuTest` compares every texel with `CloudNoiseTextures`: within one step of 255 (shape 4
+  channels of 131,072 off by one step, detail 1 of 16,384, curl none).
+- **Density** (clouds.slang, Schneider and Vos 2015, Schneider 2017): the weather map's coverage, type, rain and top;
+  the type's profile from the atlas, the anvil widening the coverage near the top (`coverage^(1/(1+anvil))`), the
+  upper part sheared downwind; the base shape (Perlin–Worley remapped by the low-frequency Worley fbm) stretched from
+  its 5–95 % quantiles of the CPU reference (0.697–0.854) to [0, 1], so that the coverage remap's threshold
+  `1 - coverage` leaves a cloud fraction about the coverage; eroded by the detail noise (wispy at the base, billowy
+  above), distorted by curl; times the type's extinction at density 1: its physical extinction (`σ = 3·LWC / 2ρr`, the
+  layer's mean) over the layer's mean density at full cover (half the profile's mean), so a cloud's column has its
+  water's optical depth (before, every cloud had about half of it).
+- **Lighting**: the approximate Mie phase of the type's droplet diameter (Jendersie and d'Eon 2023; HG 0.75 for ice);
+  a cone march towards the sun (steps doubling); Wrenninge's octaves (a, b, c = 0.5, N = 3; Hillaire 2016); the
+  diffuse light deep inside as a two-stream slab (`T = 1 / (1 + ¾(1−g)τ)`, Bohren 1987) of the sun's and sky's light
+  on the layer's top and the ground's from below (`σ_s·E/π`: an isotropic field of irradiance E has fluence 4E), the
+  optical depths to the top and base at the type's physical extinction (a wisp at a thick cloud's base is as deep below
+  its top as the cloud is); after the cone, the rest of the way to the top at the same extinction (Schneider's long
+  step); a nimbostratus deck's base from below at noon 1,149 cd/m² against sunlit tops of 14,851 (`aThickRainCloudIs
+  DarkFromBelow`);
+  Hillaire 2016's energy-conserving step; the sun through the atmosphere per sample (Chapman function after Schüler
+  2012) and the aerial perspective at the clouds' transmittance-weighted depth.
+- **Tiers** (`render.clouds`, `Clouds`): `volumetric` (fly-through: fine steps with detail from the camera for its first
+  4 km, 160 coarse steps, 6 light steps), `layered` (default: two-speed march from outside, 96 steps, 4 light steps),
+  `skybox` (2D: the coverage as the fraction of sky covered on each type's layer, lit as a two-stream slab; no noise,
+  no march, no history), off. Steps grow with the distance (2 % of it, at least 30 m, at most the slab's share of the
+  coarse steps) out to 200 km (the far map). The ray-marched tiers march at half resolution with a jittered start, accumulate
+  temporally (history reprojected by the clouds' mean depth, clamped to the 3 × 3 neighbourhood, less history while a
+  flash lights them) and upsample joint-bilaterally on depth over the scene's colour (`scene·T + L`), at `Order.SKY`
+  after the sky background. Every tunable is a kind config (`render.clouds.<kind>.*`) or a setting (`CloudSettings`).
+- **Rain shafts**: below each type's base where the map has rain, Marshall–Palmer drops' extinction (`3.65·10⁻⁴·R^0.63`
+  per metre at R mm/h, extinction efficiency 2), forward-scattering, lit by the sun under the clouds' Beer shadow.
+- **Cloud shadows**: `CloudShadowMap`, Hillaire 2020's Beer shadow map (front depth, mean extinction, maximum optical
+  depth), 512² over 32 km along the sun, texel-snapped, 24 steps a texel on the base shape (the 2D tier's of the
+  coverage alone: no noise), and beyond it the coverage projection (the map's cover where the ray to the sun crosses
+  2 km); `CloudShadowMask` turns it into the sun's screen-space shadow mask at each pixel, given to
+  shading through the shadow table (the engine's mask path; see below).
+- **Lightning**: `ActiveFlashes` picks the frame's flashes (intensity: a median first stroke's peak, 2·10¹⁰ cd by
+  default (Guo and Krider 1982: about 2·10⁶ W/m of optical power over a 5 km channel), scaled by the peak current, times `Flicker.average` over the frame). The clouds glow from inside by the
+  diffusion approximation (fluence `I·e^(−σ_eff·r)/(D·r)`, `D = 1/(3σ(1−g))`, `σ_eff = √(3σ_a'σ(1−g))` with a leak
+  `σ_a'` setting; Dobashi et al. 2001's observation that multiple scattering dominates). `LightningLights` puts a point
+  `LightSource` per flash on scene nodes (so `LightSync` lights the ground and everything else); `LightningBolts` draws
+  the ground flashes' `BoltGeometry` as camera-facing strips of the channel's luminance (additive, at least 1.5 pixels
+  wide with the intensity kept, fading above the cloud base).
+- **Atmosphere**: `CloudLighting` is the interface the clouds need (sun direction and illuminance outside the
+  atmosphere, the sky's light, the horizon's radiance, the medium's coefficients, the scene units).
+  `AtmosphereLighting` implements it with effects-atmosphere 0.3.0's `Atmosphere` (Hillaire 2020): its sun, its
+  media's coefficients, its exposure (`sceneUnits`: the clouds' physical values, the flashes' candela among them, take
+  the same factor), its sky's mean radiance where its fog read it back; the pictures use its `AtmosphereSky`,
+  `AerialPerspective` (the media hook on surfaces) and `SkyCapture` (the environment, dimmed by the clouds' diffused
+  light: `WeatherGpu.skyBelowClouds`). `SceneSky` stays for scenes without it (a scene sun node over an exponential
+  atmosphere). Still analytic in clouds.slang: the per-sample transmittance to the sun and the clouds' own aerial
+  perspective (Chapman function on the atmosphere's coefficients) instead of its transmittance table and aerial
+  perspective volume (`atmosphere/atmosphere.slang`); the follow-up of #9.
+- **Measured** (`CloudBenchmark`, TRUESIM_BENCHMARK=true, RX 9070 XT, 2026-11-08, 1920 x 1080, ULTRA weather maps,
+  march at half resolution; medians of 60 frames after 40, ranges of 3 rounds; the frame includes forward shading of
+  the ground with the environment's light, the test sky, the GPU weather maps (1024² and 128² a frame), the depth draw
+  for the mask and the readback):
+
+  | Scene | Tier | Clouds (march, temporal, composite / 2D) | Shadow map + mask | Frame (GPU) |
+  |---|---|---|---|---|
+  | fair cumulus, ground | volumetric | 6.36-6.38 ms | 0.15 ms | 8.42-8.43 ms |
+  | fair cumulus, ground | layered | 3.32-3.35 ms | 0.15 ms | 5.38-5.42 ms |
+  | fair cumulus, ground | skybox (2D) | 0.06 ms | 0.15 ms | 2.11-2.13 ms |
+  | overcast, ground | volumetric | 3.27-3.31 ms | 0.14 ms | 5.34-5.38 ms |
+  | overcast, ground | layered | 2.31-2.32 ms | 0.14 ms | 4.38-4.39 ms |
+  | overcast, ground | skybox (2D) | 0.06 ms | 0.13 ms | 2.08-2.09 ms |
+  | thunderstorm, ground | volumetric | 4.91 ms | 0.23 ms | 7.05-7.06 ms |
+  | thunderstorm, ground | layered | 2.66 ms | 0.23 ms | 4.81-4.82 ms |
+  | thunderstorm, ground | skybox (2D) | 0.06 ms | 0.23 ms | 2.19-2.20 ms |
+  | flying through | volumetric | 7.50-7.52 ms | 0.15 ms | 9.63-9.65 ms |
+  | flying through | layered | 5.94-5.96 ms | 0.15 ms | 8.02-8.07 ms |
+  | flying through | skybox (2D) | 0.04 ms | 0.15 ms | 2.10-2.11 ms |
+
+  More than the first version of this PR (layered fair cumulus 2.0 ms, flying through 4.3): steps now grow with the
+  distance from 30 m (fine near, as the stipple of distant thin clouds needed), the march reaches 200 km (the far map:
+  decks reach the horizon), each sample blends two types and the light march's tail reads the Beer map. Above the
+  report's estimates for the ray-marched tiers (0.6-1.5 ms layered); the next steps are #8's: the voxel cache's sun
+  optical-depth volume in place of the cone near the camera, empty-space skipping, `sparse16` reprojection, fewer
+  light steps far away.
+- **Tests**: the GPU noise against the CPU reference; the GPU's weather map is the field at the frame's time
+  everywhere (`WeatherMapGpuTest`, the seams' cause gone); coverage follows the weather map (pixels over a brushed disc
+  of altostratus 30,807 cd/m², over the clear map 1,623 through 12 km of air); the shadow darkens the ground under the
+  cloud (9,026 → 1,539 cd/m² with the mask: the sky's light remains; without the mask both alike); a thick rain cloud is
+  dark from below (a nimbostratus deck's base 1,423 cd/m² at noon, the clear zenith 1,504, sunlit tops 27,318); a change
+  of cloud type is continuous (scattered cumulus to broken stratocumulus to overcast stratus, a frame a second, calm:
+  the largest frame-to-frame change 2.2 times the median; before the blending, 6 to 13 times, at the halfway switch and
+  where a fading type's layer was cut off); a flash lights a nimbostratus from inside at night (0 → 4.0 cd/m²) and the
+  ground through the scene's light (1.9 → 64 cd/m²); a ground flash draws its bolt; every tier draws the same weather;
+  effects-atmosphere lights the clouds in its scene units; CPU tests of the flash selection, the sky and the atmosphere.
+- **Films** (`CloudShots`, TRUESIM_SCREENSHOTS=true): pops per film (`render/tools/popmetric.py`: a 32 × 32 block whose
+  frame-to-frame change exceeds 4 times its own median over the 8 frame pairs around it and 0.03): fair to overcast over
+  10 minutes 802 before, 33 after; a storm rolling in, largest block change 0.996 before (whole regions switching),
+  0.33 after.
+
 ## Tiers and quality presets
 
 GPU costs are the report's estimates for the RX 9070 XT at 1080p (est.), to be replaced by the plugins' benchmarks.
@@ -133,6 +245,26 @@ owners.
 | A ribbon or beam renderer fed with a polyline (or a segment list) from the CPU | visible branching bolts | scene-effects has ribbons (particles in spawn order) and beams (two points, noise subdivided), see below |
 | Audio one-shots scheduled at a delay and position | thunder | scene audio (`scene-audio` on main) plays sounds on nodes; a scheduled start is to confirm |
 | Fixed-step simulation in the game loop | `Weather.advance` | the app's own loop; scene has fixed steps for animators (A5) |
+
+### Engine features missing or limiting (found building weather-render on engine 0.192.0)
+
+- **A per-light transmittance term in shading** (lights.slang's `lightIrradiance`: one shadow entry per light and
+  point, `shadowFor` picking it). Cloud shadows go through the screen-space mask path instead (`ShadowTable.shadowMask`
+  on the table's last entry), so while the scene's own shadows of the sun are on (`ShadowSpec` other than `NONE`) the
+  clouds' shadow yields to them; fog, transparents, particles and GI hits are not on the screen grid and get none. The
+  hook wanted: a light's transmittance multiplied into its irradiance wherever any path lights a point (a map or a
+  function per light, e.g. `ILightTransmittance` in the shadow table), as volumetrics-design §7.2 proposes; the
+  atmosphere's sun transmittance needs the same.
+- **Persistent graph images are 2D only** (`GraphBuilder.persistent`: "A persistent image is 2D, one sample"): the noise
+  volumes are dynamic 3D textures of `Textures` written by compute with a barrier of their own, ordered by a token buffer.
+- **`TextureUpdates.record` lays every region's barriers, copy region and copy info on one `MemoryStack` frame**: about
+  270 regions in a frame (the near and far maps' first upload, one region a tile) overflowed LWJGL's 64 KiB stack
+  ("Out of stack space", the test JVM died) — the pitfall "thousands of barriers overflowed the memory stack" again.
+  Worked around at first by merging runs of tiles and uploading at most 24 regions a frame; the maps are now
+  evaluated on the GPU and upload nothing.
+- **`GraphicsProgram` has no blend state**: additive and premultiplied draws (bolts, particles) make their pipelines
+  with `Pipeline.graphics` outside the graph's program cache.
+- **Readbacks of 3D images copy one slice** (`PassContext` copies with depth 1): the tests copy volumes with a shader.
 
 ### Bolt visuals and scene-effects
 

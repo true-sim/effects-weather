@@ -48,6 +48,31 @@ public final class WeatherField {
         offsetZ = z;
     }
 
+    /** The advection offset's component {@code axis} (0 x, 1 y, 2 z): how far the wind has carried the pattern, metres. */
+    public double offset(int axis) {
+        return axis == 0 ? offsetX : axis == 1 ? offsetY : offsetZ;
+    }
+
+    /** The state whose preset it evaluates. */
+    public WeatherState state() {
+        return state;
+    }
+
+    /** The noise's octaves. */
+    public int octaves() {
+        return octaves;
+    }
+
+    /** The noise's seed. */
+    public int seed() {
+        return seed;
+    }
+
+    /** The noise's period in lattice cells. */
+    public static int noisePeriod() {
+        return NOISE_PERIOD;
+    }
+
     private static double smooth(double x) {
         double t = Math.clamp(x, 0.0, 1.0);
         return t * t * (3 - 2 * t);
