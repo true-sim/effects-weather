@@ -23,11 +23,12 @@ rootProject.name = "effects-weather"
 // weather-lightning (flashes, bolts, thunder) need only the JDK and common-math; weather-model (the weather map,
 // presets, brushes, wind, the storm simulation) adds scene components and effects-atmosphere; weather-snow is the first
 // render plugin: snow lying on surfaces as a surface shading hook of the engine.
-include("weather-clouds", "weather-lightning", "weather-model", "weather-snow")
+include("weather-clouds", "weather-lightning", "weather-model", "weather-snow", "weather-render")
 project(":weather-clouds").projectDir = file("clouds")
 project(":weather-lightning").projectDir = file("lightning")
 project(":weather-model").projectDir = file("model")
 project(":weather-snow").projectDir = file("snow")
+project(":weather-render").projectDir = file("render")
 
 // Sibling checkouts are used as included builds when present (override with -Ptruesim.<repo>=<path>, or false).
 val truesimRepos = listOf("build-logic", "common-math", "common-state", "common-jobs", "common-graph", "scene", "ui", "engine",
