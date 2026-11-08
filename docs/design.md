@@ -168,33 +168,44 @@ textures, the shadow table's screen-space masks, the scene's lights). Flat world
   perspective volume (`atmosphere/atmosphere.slang`); the follow-up of #9.
 - **Measured** (`CloudBenchmark`, TRUESIM_BENCHMARK=true, RX 9070 XT, 2026-11-08, 1920 x 1080, ULTRA weather maps,
   march at half resolution; medians of 60 frames after 40, ranges of 3 rounds; the frame includes forward shading of
-  the ground, the test sky, the depth draw for the mask and the readback):
+  the ground with the environment's light, the test sky, the GPU weather maps (1024² and 128² a frame), the depth draw
+  for the mask and the readback):
 
   | Scene | Tier | Clouds (march, temporal, composite / 2D) | Shadow map + mask | Frame (GPU) |
   |---|---|---|---|---|
-  | fair cumulus, ground | volumetric | 4.12-4.15 ms | 0.08 ms | 4.84-4.87 ms |
-  | fair cumulus, ground | layered | 2.00-2.02 ms | 0.08 ms | 2.71-2.75 ms |
-  | fair cumulus, ground | skybox (2D) | 0.04 ms | 0.07-0.08 ms | 0.71-0.77 ms |
-  | overcast, ground | volumetric | 2.14-2.16 ms | 0.07 ms | 2.81-2.85 ms |
-  | overcast, ground | layered | 1.61-1.63 ms | 0.07 ms | 2.30-2.32 ms |
-  | overcast, ground | skybox (2D) | 0.04 ms | 0.05 ms | 0.68-0.69 ms |
-  | thunderstorm, ground | volumetric | 1.19-1.20 ms | 0.11 ms | 1.93-1.95 ms |
-  | thunderstorm, ground | layered | 0.68 ms | 0.11 ms | 1.42-1.49 ms |
-  | thunderstorm, ground | skybox (2D) | 0.04 ms | 0.09-0.10 ms | 0.75-0.77 ms |
-  | flying through | volumetric | 7.32-7.39 ms | 0.08 ms | 8.02-8.07 ms |
-  | flying through | layered | 4.30-4.33 ms | 0.08 ms | 4.98-5.00 ms |
-  | flying through | skybox (2D) | 0.02-0.03 ms | 0.07-0.08 ms | 0.66-0.74 ms |
+  | fair cumulus, ground | volumetric | 6.36-6.38 ms | 0.15 ms | 8.42-8.43 ms |
+  | fair cumulus, ground | layered | 3.32-3.35 ms | 0.15 ms | 5.38-5.42 ms |
+  | fair cumulus, ground | skybox (2D) | 0.06 ms | 0.15 ms | 2.11-2.13 ms |
+  | overcast, ground | volumetric | 3.27-3.31 ms | 0.14 ms | 5.34-5.38 ms |
+  | overcast, ground | layered | 2.31-2.32 ms | 0.14 ms | 4.38-4.39 ms |
+  | overcast, ground | skybox (2D) | 0.06 ms | 0.13 ms | 2.08-2.09 ms |
+  | thunderstorm, ground | volumetric | 4.91 ms | 0.23 ms | 7.05-7.06 ms |
+  | thunderstorm, ground | layered | 2.66 ms | 0.23 ms | 4.81-4.82 ms |
+  | thunderstorm, ground | skybox (2D) | 0.06 ms | 0.23 ms | 2.19-2.20 ms |
+  | flying through | volumetric | 7.50-7.52 ms | 0.15 ms | 9.63-9.65 ms |
+  | flying through | layered | 5.94-5.96 ms | 0.15 ms | 8.02-8.07 ms |
+  | flying through | skybox (2D) | 0.04 ms | 0.15 ms | 2.10-2.11 ms |
 
-  The ray-marched tiers cost more than the report's estimates (0.6-1.5 ms layered, +1-2 ms fly-through): long marches
-  of broken cloud (fair cumulus at the horizon, flying through a layer) take the fine steps with detail and a full
-  light march at every sample. Not done yet, and the obvious next steps: the voxel cache's sun optical-depth volume in
-  place of the light march near the camera, empty-space skipping, `sparse16` reprojection (a sixteenth of the pixels a
-  frame), and fewer light steps far away. The storm is cheap here because the dense cell ends the march early.
-- **Tests**: the GPU noise against the CPU reference; coverage follows the weather map (pixels over a brushed disc of
-  altostratus 27,951 cd/m², over the clear map 461); the shadow darkens the ground under the cloud (7,774 → 0 cd/m² with
-  the mask, the open ground unchanged; without the mask both alike); a flash lights a nimbostratus from inside at night
-  (0 → 0.5 cd/m²) and the ground through the scene's light (0.21 → 6.3 cd/m²); a ground flash draws its bolt; every tier
-  draws the same weather; CPU tests of the flash selection, the sky and the atmosphere.
+  More than the first version of this PR (layered fair cumulus 2.0 ms, flying through 4.3): steps now grow with the
+  distance from 30 m (fine near, as the stipple of distant thin clouds needed), the march reaches 200 km (the far map:
+  decks reach the horizon), each sample blends two types and the light march's tail reads the Beer map. Above the
+  report's estimates for the ray-marched tiers (0.6-1.5 ms layered); the next steps are #8's: the voxel cache's sun
+  optical-depth volume in place of the cone near the camera, empty-space skipping, `sparse16` reprojection, fewer
+  light steps far away.
+- **Tests**: the GPU noise against the CPU reference; the GPU's weather map is the field at the frame's time
+  everywhere (`WeatherMapGpuTest`, the seams' cause gone); coverage follows the weather map (pixels over a brushed disc
+  of altostratus 30,807 cd/m², over the clear map 1,623 through 12 km of air); the shadow darkens the ground under the
+  cloud (9,026 → 1,539 cd/m² with the mask: the sky's light remains; without the mask both alike); a thick rain cloud is
+  dark from below (a nimbostratus deck's base 1,423 cd/m² at noon, the clear zenith 1,504, sunlit tops 27,318); a change
+  of cloud type is continuous (scattered cumulus to broken stratocumulus to overcast stratus, a frame a second, calm:
+  the largest frame-to-frame change 2.2 times the median; before the blending, 6 to 13 times, at the halfway switch and
+  where a fading type's layer was cut off); a flash lights a nimbostratus from inside at night (0 → 4.0 cd/m²) and the
+  ground through the scene's light (1.9 → 64 cd/m²); a ground flash draws its bolt; every tier draws the same weather;
+  effects-atmosphere lights the clouds in its scene units; CPU tests of the flash selection, the sky and the atmosphere.
+- **Films** (`CloudShots`, TRUESIM_SCREENSHOTS=true): pops per film (`render/tools/popmetric.py`: a 32 × 32 block whose
+  frame-to-frame change exceeds 4 times its own median over the 8 frame pairs around it and 0.03): fair to overcast over
+  10 minutes 802 before, 33 after; a storm rolling in, largest block change 0.996 before (whole regions switching),
+  0.33 after.
 
 ## Tiers and quality presets
 
@@ -249,7 +260,8 @@ owners.
 - **`TextureUpdates.record` lays every region's barriers, copy region and copy info on one `MemoryStack` frame**: about
   270 regions in a frame (the near and far maps' first upload, one region a tile) overflowed LWJGL's 64 KiB stack
   ("Out of stack space", the test JVM died) — the pitfall "thousands of barriers overflowed the memory stack" again.
-  Worked around here by merging runs of tiles and uploading at most 24 regions a frame.
+  Worked around at first by merging runs of tiles and uploading at most 24 regions a frame; the maps are now
+  evaluated on the GPU and upload nothing.
 - **`GraphicsProgram` has no blend state**: additive and premultiplied draws (bolts, particles) make their pipelines
   with `Pipeline.graphics` outside the graph's program cache.
 - **Readbacks of 3D images copy one slice** (`PassContext` copies with depth 1): the tests copy volumes with a shader.

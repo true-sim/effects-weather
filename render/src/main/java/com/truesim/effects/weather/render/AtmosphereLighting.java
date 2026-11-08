@@ -7,8 +7,8 @@ import java.util.Objects;
 /**
  * The clouds lit by effects-atmosphere's atmosphere (Hillaire 2020): its sun (direction, illuminance outside the
  * atmosphere, scene units), its media (the clouds' per-sample transmittance and aerial perspective evaluate the same
- * Rayleigh and Mie coefficients analytically), its exposure ({@link Atmosphere#sceneUnits}), and the sky's light: its
- * mean radiance where its volumetric fog has read it back ({@link Atmosphere#skyAmbient}), else the light the
+ * Rayleigh and Mie coefficients analytically), its exposure ({@link com.truesim.effects.atmosphere.render.Atmosphere#sceneUnits}), and the sky's light: its
+ * mean radiance where its volumetric fog has read it back ({@link com.truesim.effects.atmosphere.render.Atmosphere#skyAmbient}), else the light the
  * atmosphere scatters out of the sun's beam (its transmittance from the ground), as {@link SceneSky} estimates it. The
  * sky itself, the aerial perspective on surfaces and the environment's light come from the atmosphere's own
  * techniques ({@code AtmosphereSky}, {@code AerialPerspective}, {@code SkyCapture}). Reads allocate nothing.
