@@ -5,7 +5,6 @@ import com.truesim.common.graph.Id;
 import com.truesim.effects.weather.render.layout.MaskPush;
 import com.truesim.engine.graph.Access;
 import com.truesim.engine.graph.Buffer;
-import com.truesim.engine.graph.BufferAccess;
 import com.truesim.engine.graph.GraphBuilder;
 import com.truesim.engine.graph.Image;
 import com.truesim.engine.graph.ImageDesc;
@@ -98,13 +97,15 @@ public final class CloudShadowMask implements Technique, AutoCloseable {
         ShadowTable table = lights.shadowTable(g.view());
         ShadowInputs.Set inputs = g.request(new ShadowInputs(g.view()));
         Image depth = g.request(depthSource(g)).depth();
-        Buffer ready = g.request(gpu.noise().generate());
+        // The cheap tiers need no noise: their shadows are of the coverage alone (as their clouds are).
+        boolean flat = g.technique(Clouds.SLOT) == Clouds.SKYBOX;
+        Buffer ready = flat ? null : g.request(gpu.noise().generate());
         Image shadow = g.request(gpu.shadowMap(ready));
         Image mask = g.create("cloud shadow mask", ImageDesc.like(depth, Ratio.ONE).format(Format.R8_UNORM));
         Pipeline program = g.computeProgram("shaders/weather/mask.spv", "maskMain", MaskPush.BYTES);
         MaskPush push = new MaskPush();
         g.pass("cloud shadow mask").read(depth, Access.SAMPLED_COMPUTE).read(shadow, Access.SAMPLED_COMPUTE)
-            .read(ready, BufferAccess.STORAGE_READ).write(mask, Access.STORAGE_WRITE).record(ctx -> {
+            .write(mask, Access.STORAGE_WRITE).record(ctx -> {
                 Camera camera = view.camera();
                 int width = ctx.regionWidth(depth);
                 int height = ctx.regionHeight(depth);

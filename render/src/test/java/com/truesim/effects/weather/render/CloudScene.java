@@ -201,6 +201,20 @@ final class CloudScene implements AutoCloseable {
 
     /** {@code n} frames of {@code seconds} of weather each; the last frame's colour, RGB floats row by row. */
     float[] frames(int n, double seconds) {
+        return frames(n, seconds, true);
+    }
+
+    /** Sets the frames' clock (the flashes' and the noise's time) to {@code seconds} of the weather's time. */
+    CloudScene at(double seconds) {
+        time = seconds;
+        return this;
+    }
+
+    /** {@code n} frames; the last frame's colour where {@code read}, else null. */
+    float[] frames(int n, double seconds, boolean read) {
+        if (weather.time() > time + 2) {
+            time = weather.time(); // the weather was run on its own: the frames follow its clock
+        }
         for (int f = 0; f < n; f++) {
             weather.setFocus(camera.position(0), camera.position(1), camera.position(2));
             weather.advance(seconds);
@@ -218,6 +232,9 @@ final class CloudScene implements AutoCloseable {
             gpu.graph.submit(0, 0);
         }
         gpu.device.waitIdle();
+        if (!read) {
+            return null;
+        }
         float[] rgb = new float[3 * width * height];
         var memory = pixels.memory();
         for (int i = 0; i < width * height; i++) {

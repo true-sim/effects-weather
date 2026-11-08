@@ -36,6 +36,8 @@ public static const uint CIRRUS = 8;
  */
 public static const float SHAPE_LOW = 0.697;
 public static const float SHAPE_HIGH = 0.854;
+/** A shape volume slot meaning none: cloudAt's density from the coverage and profile alone (the cheap tiers). */
+public static const uint NO_NOISE = 0xffffffff;
 /** Henyey-Greenstein g of cloud droplets for similarity (diffusion): sigma (1 - g) is the reduced extinction. */
 public static const float CLOUD_G = 0.85;
 
@@ -285,6 +287,12 @@ public CloudPoint cloudAt(CloudFrame* f, float3 rel, float altitude, bool detail
         return c;
     }
     float coverage = pow(w.coverage, 1.0 / (1.0 + profile.y)); // the anvil widens the coverage near the top
+    if (shapeVolume == NO_NOISE)
+    {
+        // The cheap tiers' clouds: the coverage as the fraction filled, at the profile's density.
+        c.extinction = coverage * profile.x * f[0].types[t].extinction * f[0].densityScale;
+        return c;
+    }
     float3 sp = f[0].shapeAnchor + float3(rel.x, altitude, rel.z) / f[0].shapePeriod;
     float4 shape = volumes[shapeVolume].SampleLevel(samplers[LINEAR_REPEAT], sp, 0);
     float low = dot(shape.gba, float3(0.625, 0.25, 0.125));

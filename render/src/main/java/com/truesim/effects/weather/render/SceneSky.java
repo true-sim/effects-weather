@@ -1,5 +1,6 @@
 package com.truesim.effects.weather.render;
 
+import com.truesim.common.math.Maths;
 import com.truesim.scene.core.LightSource;
 import com.truesim.scene.core.NodeHandle;
 import com.truesim.scene.core.SceneGraph;
@@ -105,7 +106,7 @@ public final class SceneSky implements CloudLighting {
         for (int c = 0; c < 3; c++) {
             double beta = (c == 0 ? atmosphere.rayleighRed() : c == 1 ? atmosphere.rayleighGreen()
                 : atmosphere.rayleighBlue()) + atmosphere.mieScattering();
-            radiance[c] = top[c] * atmosphere.transmittance(c, 0, mu) * (1 - Math.exp(-beta * 50_000)) / (4 * Math.PI);
+            radiance[c] = top[c] * atmosphere.transmittance(c, 0, mu) * (1 - Maths.exp(-beta * 50_000)) / (4 * Math.PI);
         }
     }
 

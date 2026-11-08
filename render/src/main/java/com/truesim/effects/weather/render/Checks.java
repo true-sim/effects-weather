@@ -1,5 +1,6 @@
 package com.truesim.effects.weather.render;
 
+import com.truesim.annotations.AllowAllocation;
 import com.truesim.engine.graph.GraphBuilder;
 import com.truesim.engine.render.SceneView;
 
@@ -10,6 +11,7 @@ final class Checks {
     }
 
     /** Fails unless {@code g} builds {@code view}'s port: a view's technique belongs to its view. */
+    @AllowAllocation("failing")
     static void inView(GraphBuilder g, SceneView view, Object technique) {
         if (g.view() != view.port()) {
             throw new IllegalStateException(technique.getClass().getSimpleName() + " of " + view.port()

@@ -44,7 +44,8 @@ final class TestGpu implements AutoCloseable {
     /** A device on the best GPU, validated (synchronization too), or the test skipped without Vulkan. */
     static TestGpu open() {
         VulkanInstance instance;
-        boolean validation = !"true".equals(System.getenv("TRUESIM_BENCHMARK"));
+        boolean validation = !"true".equals(System.getenv("TRUESIM_BENCHMARK"))
+            && !"true".equals(System.getenv("TRUESIM_SCREENSHOTS"));
         try {
             instance = VulkanInstance.builder().applicationName("tests").validation(validation)
                 .synchronizationValidation(validation).surfaces(false).build();

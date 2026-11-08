@@ -1,5 +1,6 @@
 package com.truesim.effects.weather.render;
 
+import com.truesim.common.math.Maths;
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 import static org.lwjgl.vulkan.VK10.VK_SHADER_STAGE_FRAGMENT_BIT;
 import static org.lwjgl.vulkan.VK10.VK_SHADER_STAGE_VERTEX_BIT;
@@ -119,7 +120,7 @@ public final class LightningBolts implements AutoCloseable {
                 weather.sample(mx, my, mz, sample);
                 double base = sample.coverage() > 0.05
                     ? gpu.types().profile(sample.cloudType()).base() : Double.POSITIVE_INFINITY;
-                double hidden = my > base ? Math.exp(-(my - base) / fade) : 1;
+                double hidden = my > base ? Maths.exp(-(my - base) / fade) : 1;
                 long o = (long) count * BoltSegmentLayout.BYTES;
                 segments.putFloat(o + BoltSegmentLayout.A, (float) (bolt.x(p) - gpu.anchorX()));
                 segments.putFloat(o + BoltSegmentLayout.A + 4, (float) bolt.y(p));

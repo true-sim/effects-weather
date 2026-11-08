@@ -1,5 +1,7 @@
 package com.truesim.effects.weather.render;
 
+import com.truesim.common.math.Maths;
+
 /**
  * What the clouds need from the sky and the atmosphere, as an interface until effects-atmosphere's render techniques
  * (Hillaire 2020: transmittance table, sky-view and aerial perspective volume) take its place: the sun and the light
@@ -43,7 +45,7 @@ public interface CloudLighting {
             double rayleigh = c == 0 ? rayleighRed : c == 1 ? rayleighGreen : rayleighBlue;
             double depth = rayleigh * rayleighHeight * chapman(radius, rayleighHeight, h, mu)
                 + mieExtinction * mieHeight * chapman(radius, mieHeight, h, mu);
-            return Math.exp(-Math.min(depth, 80));
+            return Maths.exp(-Math.min(depth, 80));
         }
 
         /** Schüler 2012's Chapman function times the density at height {@code h}, as clouds.slang has it. */
@@ -52,11 +54,11 @@ public interface CloudLighting {
             double hh = Math.max(h, 0) / scaleHeight;
             double c = Math.sqrt(x + hh);
             if (mu >= 0) {
-                return c / (c * mu + 1) * Math.exp(-hh);
+                return c / (c * mu + 1) * Maths.exp(-hh);
             }
             double x0 = Math.sqrt(Math.max(1 - mu * mu, 0)) * (x + hh);
             double c0 = Math.sqrt(x0);
-            return 2 * c0 * Math.exp(x - x0) - c / (1 - c * mu) * Math.exp(-hh);
+            return 2 * c0 * Maths.exp(x - x0) - c / (1 - c * mu) * Maths.exp(-hh);
         }
     }
 }

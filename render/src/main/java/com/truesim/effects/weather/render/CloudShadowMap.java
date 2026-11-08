@@ -1,6 +1,7 @@
 package com.truesim.effects.weather.render;
 
 import com.truesim.annotations.AllowAllocation;
+import com.truesim.effects.weather.render.layout.CloudsConstants;
 import com.truesim.effects.weather.render.layout.ShadowMapPush;
 import com.truesim.engine.graph.Access;
 import com.truesim.engine.graph.Buffer;
@@ -21,7 +22,8 @@ import com.truesim.engine.vulkan.Pipeline;
  * placed is part of {@link WeatherGpu}'s frame record.
  *
  * @param gpu the weather
- * @param noiseReady the noise's generation ({@link CloudNoise#generate}): read, so the map comes after it
+ * @param noiseReady the noise's generation ({@link CloudNoise#generate}): read, so the map comes after it; null for
+ *     the cheap tiers' map, of the coverage and profiles alone (no noise: design §7.4's coverage projection)
  * @param size texels per edge
  * @param steps steps through the slab per texel
  */
@@ -33,9 +35,13 @@ public record CloudShadowMap(WeatherGpu gpu, Buffer noiseReady, int size, int st
         Image map = g.create("cloud shadow map", ImageDesc.of(Format.R16G16B16A16_SFLOAT, size, size));
         Pipeline program = g.computeProgram("shaders/weather/shadowmap.spv", "shadowMapMain", ShadowMapPush.BYTES);
         ShadowMapPush push = new ShadowMapPush();
-        g.pass("cloud shadow map").read(noiseReady, BufferAccess.STORAGE_READ).write(map, Access.STORAGE_WRITE)
-            .record(ctx -> ctx.dispatch(program, push.frame(gpu.address()).output(ctx.storage(map))
-                .shape(gpu.noise().shape()).size(size).steps(steps), (size + 7) / 8, (size + 7) / 8, 1));
+        GraphBuilder.PassBuilder pass = g.pass("cloud shadow map").write(map, Access.STORAGE_WRITE);
+        if (noiseReady != null) {
+            pass.read(noiseReady, BufferAccess.STORAGE_READ);
+        }
+        int shape = noiseReady != null ? gpu.noise().shape() : CloudsConstants.NO_NOISE;
+        pass.record(ctx -> ctx.dispatch(program, push.frame(gpu.address()).output(ctx.storage(map)).shape(shape)
+            .size(size).steps(steps), (size + 7) / 8, (size + 7) / 8, 1));
         return map;
     }
 }
