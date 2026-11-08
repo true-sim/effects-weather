@@ -69,6 +69,7 @@ final class VolumetricClouds implements Technique {
         Image depth = g.read(Keys.SCENE_DEPTH);
         CloudNoise noise = gpu.noise();
         Buffer ready = g.request(noise.generate());
+        Buffer maps = g.request(gpu.maps());
         Image shadow = g.request(gpu.shadowMap(ready));
         int resolution = Math.max(1, config.get().resolution());
         int width = Math.max(1, (view.width() + resolution - 1) / resolution);
@@ -89,6 +90,7 @@ final class VolumetricClouds implements Technique {
         CompositePush compositePush = new CompositePush();
 
         g.pass("cloud march").read(depth, Access.SAMPLED_COMPUTE).read(ready, BufferAccess.STORAGE_READ)
+            .read(maps, BufferAccess.STORAGE_READ)
             .read(shadow, Access.SAMPLED_COMPUTE).write(march, Access.STORAGE_WRITE)
             .write(marchDepth, Access.STORAGE_WRITE).record(ctx -> {
                 Clouds.March c = config.get();

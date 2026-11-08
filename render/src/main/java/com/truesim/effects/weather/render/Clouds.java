@@ -93,13 +93,13 @@ public final class Clouds implements Technique {
 
     /** Fly-through volumes. */
     public static final TechniqueKind<March, Context, Technique> VOLUMETRIC = TechniqueKind.of(SLOT, "volumetric",
-        new March(2, 160, 120_000, 4000, 6, 40, true, true, 0.9f, 0.2f, true, true),
+        new March(2, 160, 200_000, 4000, 6, 40, true, true, 0.9f, 0.2f, true, true),
         "ray-marched volumes from the camera: fly through them",
         (context, config) -> new VolumetricClouds(context, config));
 
     /** Ray-marched layers. */
     public static final TechniqueKind<March, Context, Technique> LAYERED = TechniqueKind.of(SLOT, "layered",
-        new March(2, 96, 80_000, 0, 4, 60, true, true, 0.9f, 0.2f, true, true),
+        new March(2, 96, 200_000, 0, 4, 60, true, true, 0.9f, 0.2f, true, true),
         "ray-marched layers (2.5D), seen from outside",
         (context, config) -> new VolumetricClouds(context, config));
 

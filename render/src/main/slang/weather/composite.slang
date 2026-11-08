@@ -99,7 +99,7 @@ void skyboxMain(uint3 id : SV_DispatchThreadID)
         {
             float3 p = push.camera + dir * t;
             Weather w = weatherAt(f, p.xz);
-            uint type = typeOf(w.type);
+            uint type = w.a;
             float base = f[0].types[type].base;
             float top = w.top > base ? w.top : f[0].types[type].top;
             float middle = 0.5 * (base + top);
@@ -112,7 +112,7 @@ void skyboxMain(uint3 id : SV_DispatchThreadID)
                 // extinction over the profile's mean density (a half), its light the two-stream slab's: diffusely
                 // reflected above it, diffusely transmitted below it, plus the sun's single scattering.
                 float thickness = top - base;
-                float tau = thickness * f[0].types[type].extinction * f[0].densityScale * 0.5;
+                float tau = thickness * f[0].types[type].column * f[0].densityScale;
                 float3 toSun = f[0].sunDirection;
                 float mu = max(toSun.y, 0.05);
                 float view = tau / max(abs(dir.y), 0.05);

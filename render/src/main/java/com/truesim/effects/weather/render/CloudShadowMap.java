@@ -35,7 +35,9 @@ public record CloudShadowMap(WeatherGpu gpu, Buffer noiseReady, int size, int st
         Image map = g.create("cloud shadow map", ImageDesc.of(Format.R16G16B16A16_SFLOAT, size, size));
         Pipeline program = g.computeProgram("shaders/weather/shadowmap.spv", "shadowMapMain", ShadowMapPush.BYTES);
         ShadowMapPush push = new ShadowMapPush();
-        GraphBuilder.PassBuilder pass = g.pass("cloud shadow map").write(map, Access.STORAGE_WRITE);
+        Buffer maps = g.request(gpu.maps());
+        GraphBuilder.PassBuilder pass = g.pass("cloud shadow map").read(maps, BufferAccess.STORAGE_READ)
+            .write(map, Access.STORAGE_WRITE);
         if (noiseReady != null) {
             pass.read(noiseReady, BufferAccess.STORAGE_READ);
         }

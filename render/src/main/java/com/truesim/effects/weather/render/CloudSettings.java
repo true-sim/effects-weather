@@ -47,8 +47,8 @@ public final class CloudSettings {
      * The optical depth to a layer's top (bottom), for the diffused light inside it, as a fraction of the sample's
      * extinction times the distance: the layer's mean density relative to the sample's.
      */
-    public static final Setting<Float> AMBIENT_DEPTH = Setting.decimal("render.clouds.ambientDepth", 0.5f, 0, 2,
-        "the optical depth to a cloud layer's top for the light diffused inside it, a fraction of the local one");
+    public static final Setting<Float> AMBIENT_DEPTH = Setting.decimal("render.clouds.ambientDepth", 1, 0, 4,
+        "multiplies the optical depth to a cloud layer's top (its mean extinction) for the light diffused inside it");
     /** The ground's albedo, for the light it bounces up into cloud bases. */
     public static final Setting<Float> GROUND_ALBEDO = Setting.decimal("render.clouds.groundAlbedo", 0.2f, 0, 1,
         "the ground's albedo, lighting the clouds' bases from below");
@@ -68,7 +68,7 @@ public final class CloudSettings {
     public static final Setting<Float> RAIN_EXTINCTION = Setting.decimal("render.rain.extinction", 1, 0, 16,
         "multiplies the rain shafts' extinction from Marshall-Palmer drops (1 physical)");
     /** A median flash's first stroke's peak luminous intensity, candela. */
-    public static final Setting<Float> FLASH_INTENSITY = Setting.decimal("render.lightning.intensity", 2.0e9f, 0, 1e13f,
+    public static final Setting<Float> FLASH_INTENSITY = Setting.decimal("render.lightning.intensity", 2.0e10f, 0, 1e13f,
         "the peak luminous intensity of a median flash's first stroke, candela (scaled by each flash's current)");
     /** The channel's glow radius. */
     public static final Setting<Float> FLASH_RADIUS = Setting.decimal("render.lightning.radius", 40, 1, 2000,

@@ -32,6 +32,8 @@ import com.truesim.engine.graph.ViewPort;
 import com.truesim.engine.render.Camera;
 import com.truesim.engine.render.ClusteredForwardShading;
 import com.truesim.engine.render.ClusteredLights;
+import com.truesim.engine.render.Environment;
+import com.truesim.engine.render.EnvironmentLighting;
 import com.truesim.engine.render.GeometryPool;
 import com.truesim.engine.render.GpuScene;
 import com.truesim.engine.render.Keys;
@@ -85,6 +87,8 @@ final class CloudScene implements AutoCloseable {
     final long sun;
     final Materials materials;
     final LightningBolts bolts;
+    final Environment environment;
+    final double[] below = new double[3];
     final int groundMaterial;
     private final GpuBuffer pixels;
     private double time;
@@ -146,7 +150,9 @@ final class CloudScene implements AutoCloseable {
             port.add(gpu.own(new CloudShadowMask(clouds, view, renderer, lights, 0)));
         }
         bolts = gpu.own(new LightningBolts(gpu.device, gpu.graph.frameSlots(), clouds, 3, 400));
-        port.add(new TestSky(clouds, view)).add(new Clouds(clouds, view)).add(bolts.view(view))
+        environment = Environment.uniform("sky under the clouds", 0, 0, 0);
+        port.add(new EnvironmentLighting(environment, view));
+        port.add(new TestSky(clouds, view, below)).add(new Clouds(clouds, view)).add(bolts.view(view))
             .add(new Capture(pixels, width, height)).output(Keys.SCENE_COLOR, output);
         weather.refreshAll();
     }
@@ -222,6 +228,10 @@ final class CloudScene implements AutoCloseable {
             nodes.update(); // the sun's node moved: the sky reads its world transform
             clouds.update(time, seconds, sky, settings); // before the scene syncs: the flashes' lights go through it
             bolts.update();
+            // The ground's light from the sky under the clouds (the environment's), and the air's under them.
+            clouds.skyBelowClouds(camera.position(0), camera.position(2), 10_000, below);
+            environment.setColor((float) (below[0] / Math.PI), (float) (below[1] / Math.PI),
+                (float) (below[2] / Math.PI));
             if (flashLights != null) {
                 flashLights.update(clouds);
                 nodes.update();

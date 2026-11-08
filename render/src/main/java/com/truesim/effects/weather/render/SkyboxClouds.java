@@ -3,6 +3,8 @@ package com.truesim.effects.weather.render;
 import com.truesim.annotations.AllowAllocation;
 import com.truesim.effects.weather.render.layout.CompositePush;
 import com.truesim.engine.graph.Access;
+import com.truesim.engine.graph.Buffer;
+import com.truesim.engine.graph.BufferAccess;
 import com.truesim.engine.graph.GraphBuilder;
 import com.truesim.engine.graph.Image;
 import com.truesim.engine.graph.Key;
@@ -45,7 +47,8 @@ final class SkyboxClouds implements Technique {
         Image depth = g.read(Keys.SCENE_DEPTH);
         Pipeline program = g.computeProgram("shaders/weather/composite.spv", "skyboxMain", CompositePush.BYTES);
         CompositePush push = new CompositePush();
-        g.pass("clouds 2d").read(depth, Access.SAMPLED_COMPUTE).write(color, Access.STORAGE_WRITE).record(ctx -> {
+        Buffer maps = g.request(gpu.maps());
+        g.pass("clouds 2d").read(depth, Access.SAMPLED_COMPUTE).read(maps, BufferAccess.STORAGE_READ).write(color, Access.STORAGE_WRITE).record(ctx -> {
             Camera camera = view.camera();
             int width = ctx.regionWidth(color);
             int height = ctx.regionHeight(color);

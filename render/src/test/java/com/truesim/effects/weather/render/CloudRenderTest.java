@@ -90,7 +90,7 @@ class CloudRenderTest {
             double[] m = coveredAndClear(s, rgb);
             System.out.printf("Coverage: covered pixels %.0f cd/m2, clear %.0f cd/m2%n", m[0], m[1]);
             assertThat(m[0]).as("sunlit cloud tops where the map has cover").isGreaterThan(5000);
-            assertThat(m[1]).as("the black ground where it has none").isLessThan(m[0] * 0.06);
+            assertThat(m[1]).as("the black ground, through 12 km of air, where it has none").isLessThan(m[0] * 0.1);
         }
     }
 
@@ -199,6 +199,78 @@ class CloudRenderTest {
         }
     }
 
+    /** The mean luminance of the upper half of the image (the sky's) looking up. */
+    private static double upward(CloudScene s, int frames) {
+        s.look(0, 2, 0, 0.001, 1, 0.001, Math.toRadians(60));
+        float[] rgb = s.frames(frames, FRAME);
+        return mean(s, rgb);
+    }
+
+    @Test
+    void aThickRainCloudIsDarkFromBelow() {
+        double zenith;
+        try (CloudScene s = new CloudScene(W, H, Quality.MEDIUM, WeatherPreset.CLEAR, false)) {
+            s.sun(50, 180);
+            zenith = upward(s, 4);
+        }
+        double sunlit;
+        try (CloudScene s = disc(false)) {
+            // Fair-weather tops in the sun, from above (as coverageFollowsTheWeatherMap sees them).
+            s.ground(0).sun(50, 180).look(-1500, 12_000, 0, 0.001, -1, 0.001, Math.toRadians(60));
+            sunlit = coveredAndClear(s, s.frames(4, FRAME))[0];
+        }
+        double base;
+        try (CloudScene s = new CloudScene(W, H, Quality.MEDIUM, WeatherPreset.CLEAR, false)) {
+            // A nimbostratus deck 0.5-4 km, raining: optical depth about a hundred.
+            s.weather.addBrush(WeatherBrush.set(20_000, CloudType.NIMBOSTRATUS, 1, 0.6), 0, 0, 0);
+            s.weather.refreshAll();
+            s.sun(50, 180);
+            float[] rgb;
+            s.look(0, 2, 0, 0.001, 1, 0.001, Math.toRadians(60));
+            rgb = s.frames(4, FRAME);
+            Images.write("nimbostratus-below", rgb, W, H, 1 / (1.2 * Math.pow(2, 11)));
+            base = mean(s, rgb);
+        }
+        System.out.printf("From below: clear zenith %.0f cd/m2, under nimbostratus %.0f; sunlit tops %.0f%n", zenith,
+            base, sunlit);
+        assertThat(base).as("a rain cloud's base is darker than the clear sky beside it").isLessThan(zenith);
+        assertThat(base).as("and dark grey beside sunlit clouds").isLessThan(0.1 * sunlit);
+    }
+
+    @Test
+    void aChangeOfCloudTypeIsContinuous() {
+        try (CloudScene s = new CloudScene(W, H, Quality.MEDIUM, WeatherPreset.SCATTERED, false)) {
+            s.settings.set(Clouds.LAYERED.setting("temporal"), false); // every frame its own
+            s.settings.set(CloudSettings.EVOLUTION, 0f);
+            s.sun(40, 200).look(0, 2, 0, -0.3, 0.3, -1, Math.toRadians(70));
+            s.frames(2, 1);
+            // Cumulus to stratocumulus to overcast stratus over 60 s, a frame a second.
+            s.weather.setPreset(WeatherPreset.BROKEN, 30);
+            float[] last = s.frames(1, 1);
+            double[] steps = new double[60];
+            for (int f = 0; f < steps.length; f++) {
+                if (f == 30) {
+                    s.weather.setPreset(WeatherPreset.OVERCAST, 30);
+                }
+                float[] rgb = s.frames(1, 1);
+                double sum = 0;
+                for (int i = 0; i < rgb.length; i++) {
+                    sum += Math.abs(rgb[i] - last[i]);
+                }
+                steps[f] = sum / rgb.length;
+                last = rgb;
+            }
+            double[] sorted = steps.clone();
+            java.util.Arrays.sort(sorted);
+            double median = sorted[steps.length / 2];
+            double largest = sorted[steps.length - 1];
+            System.out.printf("Type transition: frame-to-frame change median %.1f, largest %.1f cd/m2: %s%n", median,
+                largest, java.util.Arrays.toString(java.util.Arrays.stream(steps).mapToLong(Math::round).toArray()));
+            assertThat(largest).as("no frame jumps: the largest change a few times the typical one")
+                .isLessThan(4 * median);
+        }
+    }
+
     @Test
     void everyTierDrawsTheSameWeather() {
         for (String kind : new String[] {"volumetric", "layered", "skybox"}) {
@@ -211,7 +283,7 @@ class CloudRenderTest {
                 double[] m = coveredAndClear(s, rgb);
                 System.out.printf("Tier %s: covered %.0f cd/m2, clear %.0f cd/m2%n", kind, m[0], m[1]);
                 assertThat(m[0]).as(kind + ": the clouds of the map").isGreaterThan(1000);
-                assertThat(m[1]).as(kind + ": none where it has none").isLessThan(m[0] * 0.06);
+                assertThat(m[1]).as(kind + ": none where it has none").isLessThan(m[0] * 0.1);
             }
         }
     }

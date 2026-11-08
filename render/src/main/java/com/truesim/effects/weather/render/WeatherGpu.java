@@ -2,11 +2,22 @@ package com.truesim.effects.weather.render;
 
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 import static org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
 import com.truesim.annotations.AllowAllocation;
 import com.truesim.effects.weather.Weather;
 import com.truesim.effects.weather.WeatherConfig;
+import com.truesim.common.math.Maths;
+import com.truesim.effects.weather.Brushes;
+import com.truesim.effects.weather.StormSimulation;
+import com.truesim.effects.weather.WeatherBrush;
+import com.truesim.effects.weather.WeatherField;
 import com.truesim.effects.weather.WeatherGrid;
+import com.truesim.effects.weather.WeatherSample;
+import com.truesim.effects.weather.WeatherState;
 import com.truesim.effects.weather.clouds.CloudProfile;
 import com.truesim.effects.weather.clouds.CloudType;
 import com.truesim.effects.weather.clouds.CloudTypes;
@@ -15,7 +26,17 @@ import com.truesim.effects.weather.lightning.LightningEvents;
 import com.truesim.effects.weather.render.layout.CloudFrameLayout;
 import com.truesim.effects.weather.render.layout.CloudTypeLayout;
 import com.truesim.effects.weather.render.layout.CloudsConstants;
+import com.truesim.effects.weather.render.layout.FieldBrushLayout;
+import com.truesim.effects.weather.render.layout.FieldCellLayout;
+import com.truesim.effects.weather.render.layout.FieldInputsLayout;
+import com.truesim.effects.weather.render.layout.FieldPush;
 import com.truesim.effects.weather.render.layout.FlashLayout;
+import com.truesim.engine.graph.Buffer;
+import com.truesim.engine.graph.BufferAccess;
+import com.truesim.engine.graph.GraphBuilder;
+import com.truesim.engine.graph.Request;
+import com.truesim.engine.vulkan.Barriers;
+import com.truesim.engine.vulkan.Pipeline;
 import com.truesim.engine.render.Camera;
 import com.truesim.engine.render.TextureFormat;
 import com.truesim.engine.render.Textures;
@@ -52,6 +73,13 @@ public final class WeatherGpu implements AutoCloseable {
      */
     static final int MAX_REGIONS = 24;
 
+    /** Storm cells and brushes the GPU's field takes (field.slang's MAX_CELLS, MAX_BRUSHES). */
+    static final int MAX_CELLS = 64;
+    static final int MAX_BRUSHES = 32;
+
+    /** Seconds a storm cell takes to turn from towering cumulus into cumulonimbus on screen. */
+    static final double MATURING = 180;
+
     private static final ValueLayout.OfShort HALF = ValueLayout.JAVA_SHORT_UNALIGNED;
 
     private final Textures textures;
@@ -61,12 +89,20 @@ public final class WeatherGpu implements AutoCloseable {
     private final Arena arena = Arena.ofShared();
     private final int nearTexture;
     private final int farTexture;
+    private final int nearTypes;
+    private final int farTypes;
+    private final int[] cellIds;
+    private final float[] cellMature;
+    private double matureTime = Double.NaN;
     private final int atlasTexture;
-    private final MemorySegment tile;
-    private final int[] nearUploaded;
-    private final int[] farUploaded;
-    private final float[] nearTops;
-    private final float[] farTops;
+    private final FrameBuffer inputs;
+    private final int nearSize;
+    private final int farSize;
+    private final double nearExtent;
+    private final double farExtent;
+    private final WeatherSample sample = new WeatherSample();
+    private double farCentreX;
+    private double farCentreZ;
     private final ActiveFlashes flashes;
     private final CloudNoise noise;
     private final int shadowSize;
@@ -99,16 +135,20 @@ public final class WeatherGpu implements AutoCloseable {
         WeatherConfig config = weather.config();
         frame = FrameBuffer.create(device, CloudFrameLayout.BYTES,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, slots);
-        nearTexture = textures.dynamic(TextureFormat.RGBA16F, config.nearSize(), config.nearSize(), 1, false);
-        farTexture = textures.dynamic(TextureFormat.RGBA16F, config.farSize(), config.farSize(), 1, false);
-        int tt = config.tileTexels();
-        tile = arena.allocate(8L * tt * Math.max(config.nearSize(), config.farSize()), 8);
-        WeatherGrid near = weather.nearMap();
-        WeatherGrid far = weather.farMap();
-        nearUploaded = new int[near.tilesPerEdge() * near.tilesPerEdge()];
-        farUploaded = new int[far.tilesPerEdge() * far.tilesPerEdge()];
-        nearTops = new float[nearUploaded.length];
-        farTops = new float[farUploaded.length];
+        nearSize = config.nearSize();
+        farSize = config.farSize();
+        nearExtent = config.nearExtent();
+        farExtent = config.farExtent();
+        nearTexture = textures.dynamic(TextureFormat.RGBA16F, nearSize, nearSize, 1, true);
+        farTexture = textures.dynamic(TextureFormat.RGBA16F, farSize, farSize, 1, true);
+        nearTypes = textures.dynamic(TextureFormat.RGBA16F, nearSize, nearSize, 1, true);
+        farTypes = textures.dynamic(TextureFormat.RGBA16F, farSize, farSize, 1, true);
+        int capacity = weather.storms() != null ? weather.storms().capacity() : 0;
+        cellIds = new int[capacity];
+        cellMature = new float[capacity];
+        java.util.Arrays.fill(cellIds, -1);
+        inputs = FrameBuffer.create(device, FieldInputsLayout.BYTES,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, slots);
         float[] atlas = new float[4 * CloudType.count() * PROFILE_HEIGHTS];
         types.bakeProfileAtlas(PROFILE_HEIGHTS, atlas);
         MemorySegment texels = arena.allocate(2L * atlas.length, 8);
@@ -129,7 +169,53 @@ public final class WeatherGpu implements AutoCloseable {
         return new CloudShadowMap(this, noiseReady, shadowSize, shadowSteps);
     }
 
-    /** The weather it draws. */
+    /** The weather maps of the frame, evaluated on the GPU (a shared request); read its buffer to come after them. */
+    public Request<Buffer> maps() {
+        return new Maps(this);
+    }
+
+    /** {@link #maps}: the field evaluated over the near and far maps, every frame (field.slang). */
+    private record Maps(WeatherGpu gpu) implements Request<Buffer> {
+
+        @Override
+        @AllowAllocation("building the graph, when it changes")
+        public Buffer build(GraphBuilder g) {
+            WeatherGpu w = gpu;
+            Pipeline program = g.computeProgram("shaders/weather/field.spv", "fieldMain", FieldPush.BYTES);
+            FieldPush push = new FieldPush();
+            Buffer ready = g.createBuffer("weather maps ready", 16);
+            g.pass("weather maps").write(ready, BufferAccess.TRANSFER_DST).record(ctx -> {
+                ctx.fill(ready, 1);
+                // Outside the graph: the frame before's readers first, this frame's writes visible to the readers.
+                Barriers.memory(ctx.unsafe().commands(), VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                ctx.dispatch(program, push.inputs(w.inputs.deviceAddress()).map(w.textures.storageSlot(w.nearTexture))
+                    .types(w.textures.storageSlot(w.nearTypes)).size(w.nearSize).extent((float) w.nearExtent).centre(0, 0).period(WeatherField.noisePeriod()),
+                    (w.nearSize + 7) / 8, (w.nearSize + 7) / 8, 1);
+                ctx.dispatch(program, push.inputs(w.inputs.deviceAddress()).map(w.textures.storageSlot(w.farTexture))
+                    .types(w.textures.storageSlot(w.farTypes)).size(w.farSize).extent((float) w.farExtent)
+                    .centre((float) (w.farCentreX - w.anchorX), (float) (w.farCentreZ - w.anchorZ))
+                    .period(WeatherField.noisePeriod()), (w.farSize + 7) / 8, (w.farSize + 7) / 8, 1);
+                Barriers.memory(ctx.unsafe().commands(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            });
+            return ready;
+        }
+    }
+
+    /** The near map's sampled slot (RGBA16F: coverage, type A, rain, top), centred on the anchor. */
+    public int nearMap() {
+        return nearTexture & 0xffff;
+    }
+
+    /** The near map's second types' sampled slot (type B, its weight). */
+    public int nearTypes() {
+        return nearTypes & 0xffff;
+    }
+
+        /** The weather it draws. */
     public Weather weather() {
         return weather;
     }
@@ -177,21 +263,22 @@ public final class WeatherGpu implements AutoCloseable {
     }
 
     /**
-     * Uploads the map tiles that changed and writes the frame's record: the weather at {@code now} seconds of its time
+     * Writes the frame's record and the weather field's inputs (the maps are evaluated on the GPU: {@link #maps}): the weather at {@code now} seconds of its time
      * (usually {@link Weather#time()}), the frame lasting {@code frameSeconds} (the flashes' mean over it), lit by
      * {@code lighting}, tuned by {@code settings}.
      */
     public void update(double now, double frameSeconds, CloudLighting lighting, EngineSettings settings) {
         time = now;
         WeatherConfig config = weather.config();
+        // The maps centred on the camera's near-map tile, snapped to their texels so texels keep their ground.
         WeatherGrid near = weather.nearMap();
-        WeatherGrid far = weather.farMap();
-        upload(near, nearTexture, nearUploaded, nearTops);
-        upload(far, farTexture, farUploaded, farTops);
         double nearTile = near.tileTexels() * near.texelSize();
-        double farTile = far.tileTexels() * far.texelSize();
         anchorX = near.centreTileX() * nearTile;
         anchorZ = near.centreTileZ() * nearTile;
+        double farTexel = farExtent / farSize;
+        farCentreX = Math.floor(anchorX / farTexel) * farTexel;
+        farCentreZ = Math.floor(anchorZ / farTexel) * farTexel;
+        float top = writeInputs();
         FrameBuffer f = frame;
 
         lighting.sun(sun, sunLight);
@@ -203,35 +290,32 @@ public final class WeatherGpu implements AutoCloseable {
         put3(f, CloudFrameLayout.SKY_ILLUMINANCE, sky[0], sky[1], sky[2]);
         put3(f, CloudFrameLayout.AP_RADIANCE, horizon[0], horizon[1], horizon[2]);
         f.putFloat(CloudFrameLayout.GROUND_ALBEDO, settings.get(CloudSettings.GROUND_ALBEDO));
-        float top = 0;
-        for (float t : nearTops) {
-            top = Math.max(top, t);
-        }
-        for (float t : farTops) {
-            top = Math.max(top, t);
-        }
         f.putFloat(CloudFrameLayout.MAX_ALTITUDE, top);
         placeShadowMap(0, 0, settings.get(CloudSettings.SHADOW_EXTENT), shadowSize);
 
         // The maps: their slots, where they hold the weather and where the anchor falls in them (toroidal).
         f.putInt(CloudFrameLayout.NEAR_MAP, nearTexture & 0xffff);
         f.putInt(CloudFrameLayout.FAR_MAP, farTexture & 0xffff);
+        f.putInt(CloudFrameLayout.NEAR_TYPES, nearTypes & 0xffff);
+        f.putInt(CloudFrameLayout.FAR_TYPES, farTypes & 0xffff);
         f.putInt(CloudFrameLayout.PROFILE_ATLAS, atlasTexture & 0xffff);
         f.putInt(CloudFrameLayout.PROFILE_HEIGHTS, PROFILE_HEIGHTS);
-        bounds(f, CloudFrameLayout.NEAR_BOUNDS, near, nearTile, 0, 0);
-        double farCentreX = far.centreTileX() * farTile;
-        double farCentreZ = far.centreTileZ() * farTile;
-        bounds(f, CloudFrameLayout.FAR_BOUNDS, far, farTile, farCentreX - anchorX, farCentreZ - anchorZ);
-        double nearExtent = near.size() * near.texelSize();
-        double farExtent = far.size() * far.texelSize();
-        f.putFloat(CloudFrameLayout.NEAR_ANCHOR, (float) fraction(anchorX / nearExtent));
-        f.putFloat(CloudFrameLayout.NEAR_ANCHOR + 4, (float) fraction(anchorZ / nearExtent));
-        f.putFloat(CloudFrameLayout.FAR_ANCHOR, (float) fraction(anchorX / farExtent));
-        f.putFloat(CloudFrameLayout.FAR_ANCHOR + 4, (float) fraction(anchorZ / farExtent));
+        double nearTexel = nearExtent / nearSize;
+        double nearHalf = nearExtent / 2 - nearTexel;
+        double farHalf = farExtent / 2 - farTexel;
+        double fx = farCentreX - anchorX;
+        double fz = farCentreZ - anchorZ;
+        put4(f, CloudFrameLayout.NEAR_BOUNDS, -nearHalf, -nearHalf, nearHalf, nearHalf);
+        put4(f, CloudFrameLayout.FAR_BOUNDS, fx - farHalf, fz - farHalf, fx + farHalf, fz + farHalf);
+        // Texture coordinates: 0.5 at each map's centre.
+        f.putFloat(CloudFrameLayout.NEAR_ANCHOR, 0.5f);
+        f.putFloat(CloudFrameLayout.NEAR_ANCHOR + 4, 0.5f);
+        f.putFloat(CloudFrameLayout.FAR_ANCHOR, (float) (0.5 - fx / farExtent));
+        f.putFloat(CloudFrameLayout.FAR_ANCHOR + 4, (float) (0.5 - fz / farExtent));
         f.putFloat(CloudFrameLayout.NEAR_EXTENT, (float) nearExtent);
         f.putFloat(CloudFrameLayout.FAR_EXTENT, (float) farExtent);
-        f.putInt(CloudFrameLayout.NEAR_SIZE, near.size());
-        f.putInt(CloudFrameLayout.FAR_SIZE, far.size());
+        f.putInt(CloudFrameLayout.NEAR_SIZE, nearSize);
+        f.putInt(CloudFrameLayout.FAR_SIZE, farSize);
 
         // The wind the anvils and upper parts lean along, in the ground plane (x east, z south).
         double east = config.wind().east(config.advectionAltitude());
@@ -287,7 +371,12 @@ public final class WeatherGpu implements AutoCloseable {
             long o = CloudFrameLayout.TYPES + (long) t * CloudTypeLayout.BYTES;
             f.putFloat(o + CloudTypeLayout.BASE, (float) p.base());
             f.putFloat(o + CloudTypeLayout.TOP, (float) p.top());
-            f.putFloat(o + CloudTypeLayout.EXTINCTION, (float) types.art().extinction(p.extinction()));
+            // The physical extinction is the layer's mean (its water content's); the density's mean over the layer
+            // at full cover is half the profile's mean (the base shape spread over [0, 1]): the extinction at density
+            // 1 makes the mean the physical one.
+            double physical = types.art().extinction(p.extinction());
+            f.putFloat(o + CloudTypeLayout.EXTINCTION, (float) (physical / meanDensity(p)));
+            f.putFloat(o + CloudTypeLayout.COLUMN, (float) physical);
             f.putFloat(o + CloudTypeLayout.SHEAR, (float) p.shear());
             f.putFloat(o + CloudTypeLayout.DROPLET, (float) p.dropletDiameter());
             f.putFloat(o + CloudTypeLayout.ABSORPTION, (float) p.absorption());
@@ -359,89 +448,163 @@ public final class WeatherGpu implements AutoCloseable {
         f.putFloat(CloudFrameLayout.SHADOW_DEPTH, (float) ((top + 100) / ly));
     }
 
-    private void bounds(FrameBuffer f, long o, WeatherGrid grid, double tileMetres, double cx, double cz) {
-        int tiles = grid.tilesPerEdge();
-        double lo = -(tiles / 2) * tileMetres + grid.texelSize();
-        double hi = (tiles - tiles / 2) * tileMetres - grid.texelSize();
-        f.putFloat(o, (float) (cx + lo));
-        f.putFloat(o + 4, (float) (cz + lo));
-        f.putFloat(o + 8, (float) (cx + hi));
-        f.putFloat(o + 12, (float) (cz + hi));
+    private static double fraction(double v) {
+        return v - Math.floor(v);
+    }
+
+    private static void put4(FrameBuffer f, long o, double x, double y, double z, double w) {
+        f.putFloat(o, (float) x);
+        f.putFloat(o + 4, (float) y);
+        f.putFloat(o + 8, (float) z);
+        f.putFloat(o + 12, (float) w);
     }
 
     /**
-     * Uploads {@code grid}'s tiles whose versions changed into dynamic texture {@code texture}: runs of changed tiles
-     * along a row of tiles as one region each (a slot's tile lies at the slot's place in the texture, as the grid
-     * wraps), at most {@link #MAX_REGIONS} regions a frame, the rest the next frames.
+     * Writes the field's inputs for the GPU (field.slang's FieldInputs): the preset in effect, the noise's origin, the
+     * storm cells and the brushes, from the anchor; returns the highest cloud top they can make, metres.
      */
-    private void upload(WeatherGrid grid, int texture, int[] uploaded, float[] tops) {
-        int tiles = grid.tilesPerEdge();
-        int tt = grid.tileTexels();
-        int size = grid.size();
-        float[] data = grid.data();
-        int regions = 0;
-        for (int sz = 0; sz < tiles && regions < MAX_REGIONS; sz++) {
-            int sx = 0;
-            while (sx < tiles && regions < MAX_REGIONS) {
-                if (!changed(grid, uploaded, sx, sz, tiles)) {
-                    sx++;
+    private float writeInputs() {
+        FrameBuffer in = inputs;
+        WeatherField field = weather.field();
+        WeatherState state = field.state();
+        double scale = state.noiseScale();
+        int period = WeatherField.noisePeriod();
+        in.putFloat(FieldInputsLayout.COVERAGE, (float) state.coverage());
+        in.putFloat(FieldInputsLayout.VARIATION, (float) state.variation());
+        in.putFloat(FieldInputsLayout.PRECIPITATION, (float) state.precipitation());
+        // A transition's types blend over it as its parameters do (smoothstep of the progress).
+        double t = state.progress();
+        in.putFloat(FieldInputsLayout.TYPE, state.from().cloudType().channelValue());
+        in.putFloat(FieldInputsLayout.TO_TYPE, state.target().cloudType().channelValue());
+        in.putFloat(FieldInputsLayout.TO_WEIGHT, (float) (t * t * (3 - 2 * t)));
+        in.putFloat(FieldInputsLayout.TOP, (float) state.topHeight());
+        in.putFloat(FieldInputsLayout.NOISE_SCALE, (float) scale);
+        in.putInt(FieldInputsLayout.OCTAVES, field.octaves());
+        in.putInt(FieldInputsLayout.SEED, field.seed());
+        put3(in, FieldInputsLayout.NOISE_ORIGIN, wrap((anchorX - field.offset(0)) / scale, period),
+            wrap(-field.offset(1) / scale, period), wrap((anchorZ - field.offset(2)) / scale, period));
+        float top = (float) Math.max(state.topHeight(), Math.max(state.from().cloudType() == null ? 0
+            : types.profile(state.from().cloudType()).top(), types.profile(state.target().cloudType()).top()));
+        StormSimulation storms = weather.storms();
+        int cells = 0;
+        // A cell becomes a cumulonimbus over MATURING seconds of the weather's time, not at once.
+        double dt = Double.isNaN(matureTime) ? 0 : Math.max(0, time - matureTime);
+        matureTime = time;
+        if (storms != null) {
+            for (int s = 0; s < storms.capacity() && cells < MAX_CELLS; s++) {
+                if (!storms.active(s)) {
                     continue;
                 }
-                int first = sx;
-                while (sx < tiles && changed(grid, uploaded, sx, sz, tiles)) {
-                    sx++;
+                long o = FieldInputsLayout.CELL + (long) cells * FieldCellLayout.BYTES;
+                in.putFloat(o + FieldCellLayout.CORE, (float) (storms.position(s, 0) - anchorX));
+                in.putFloat(o + FieldCellLayout.CORE + 4, (float) (storms.position(s, 2) - anchorZ));
+                in.putFloat(o + FieldCellLayout.CORE_RADIUS, (float) storms.coreRadius(s));
+                in.putFloat(o + FieldCellLayout.COVERAGE, (float) storms.coverage(s));
+                in.putFloat(o + FieldCellLayout.PRECIPITATION, (float) storms.precipitation(s));
+                if (cellIds[s] != storms.id(s)) {
+                    cellIds[s] = storms.id(s);
+                    cellMature[s] = storms.cloudType(s) == CloudType.CUMULONIMBUS ? 1 : 0;
                 }
-                int run = sx - first;
-                int x0 = first * tt;
-                int z0 = sz * tt;
-                int texels = run * tt;
-                for (int j = 0; j < tt; j++) {
-                    int row = 4 * ((z0 + j) * size + x0);
-                    long to = (long) j * 4 * texels;
-                    for (int i = 0; i < 4 * texels; i++) {
-                        tile.setAtIndex(HALF, to + i, Float.floatToFloat16(data[row + i]));
-                    }
-                }
-                if (!textures.update(texture, x0, z0, 0, texels, tt, 1, tile, 0, 8L * texels, 8L * texels * tt)) {
-                    return; // no room this frame: the rest next frame
-                }
-                regions++;
-                for (int t = first; t < first + run; t++) {
-                    int slot = sz * tiles + t;
-                    uploaded[slot] = grid.tileVersion(t, sz);
-                    tops[slot] = top(data, size, t * tt, z0, tt);
-                }
+                float target = storms.cloudType(s) == CloudType.CUMULONIMBUS ? 1 : 0;
+                float step = (float) (dt / MATURING);
+                cellMature[s] = target > cellMature[s] ? Math.min(target, cellMature[s] + step)
+                    : Math.max(target, cellMature[s] - step);
+                in.putFloat(o + FieldCellLayout.TYPE, CloudType.TOWERING_CUMULUS.channelValue());
+                in.putFloat(o + FieldCellLayout.MATURE_TYPE, CloudType.CUMULONIMBUS.channelValue());
+                in.putFloat(o + FieldCellLayout.MATURE, cellMature[s]);
+                in.putFloat(o + FieldCellLayout.TOP, (float) storms.top(s));
+                in.putFloat(o + FieldCellLayout.ANVIL, (float) storms.anvil(s));
+                in.putFloat(o + FieldCellLayout.ANVIL_CENTRE, (float) (storms.anvilPosition(s, 0) - anchorX));
+                in.putFloat(o + FieldCellLayout.ANVIL_CENTRE + 4, (float) (storms.anvilPosition(s, 2) - anchorZ));
+                in.putFloat(o + FieldCellLayout.ANVIL_RADIUS, (float) (storms.anvilRadius(s) * storms.anvil(s)));
+                top = Math.max(top, (float) storms.top(s));
+                cells++;
             }
         }
-    }
-
-    private static boolean changed(WeatherGrid grid, int[] uploaded, int sx, int sz, int tiles) {
-        int version = grid.tileVersion(sx, sz);
-        return version != 0 && version != uploaded[sz * tiles + sx];
-    }
-
-    /** The highest cloud top in the tile at texel (x0, z0): its top channel, or its type's top, where it has cover. */
-    private float top(float[] data, int size, int x0, int z0, int tt) {
-        float top = 0;
-        for (int j = 0; j < tt; j++) {
-            for (int i = 0; i < tt; i++) {
-                int o = 4 * ((z0 + j) * size + x0 + i);
-                if (data[o] > 0) {
-                    float typeTop = (float) types.profile(CloudType.fromChannel(data[o + 1])).top();
-                    top = Math.max(top, Math.max(data[o + 3], typeTop));
-                }
+        in.putInt(FieldInputsLayout.CELLS, cells);
+        Brushes brushes = weather.brushes();
+        int count = Math.min(brushes.count(), MAX_BRUSHES);
+        for (int i = 0; i < count; i++) {
+            WeatherBrush b = brushes.brush(i);
+            long o = FieldInputsLayout.BRUSH + (long) i * FieldBrushLayout.BYTES;
+            in.putFloat(o + FieldBrushLayout.CENTRE, (float) (brushes.position(i, 0) - anchorX));
+            in.putFloat(o + FieldBrushLayout.CENTRE + 4, (float) (brushes.position(i, 2) - anchorZ));
+            in.putFloat(o + FieldBrushLayout.RADIUS, (float) b.radius());
+            in.putFloat(o + FieldBrushLayout.FALLOFF, (float) b.falloff());
+            in.putFloat(o + FieldBrushLayout.STRENGTH, (float) b.strength());
+            in.putFloat(o + FieldBrushLayout.COVERAGE, (float) b.coverage());
+            in.putFloat(o + FieldBrushLayout.PRECIPITATION, (float) b.precipitation());
+            in.putFloat(o + FieldBrushLayout.TYPE, b.cloudType().channelValue());
+            in.putFloat(o + FieldBrushLayout.TOP, (float) b.topHeight());
+            in.putInt(o + FieldBrushLayout.MODE, b.mode().ordinal());
+            if (b.mode() != WeatherBrush.Mode.CLEAR) {
+                top = (float) Math.max(top, Math.max(b.topHeight(), types.profile(b.cloudType()).top()));
             }
         }
+        in.putInt(FieldInputsLayout.BRUSHES, count);
         return top;
     }
 
-    private static int wanted(int slotCoord, int centre, int tiles) {
-        int base = centre - tiles / 2;
-        return base + Math.floorMod(slotCoord - base, tiles);
+    /** The optical depth of a column of {@code type} at {@code coverage} under a top channel of {@code top}. */
+    private double column(CloudType type, double coverage, double top) {
+        CloudProfile p = types.profile(type);
+        double thickness = (top > p.base() + 100 ? top : p.top()) - p.base();
+        return coverage * p.extinction() * thickness;
     }
 
-    private static double fraction(double v) {
-        return v - Math.floor(v);
+    /** A layer's mean density at full cover: half its profile's mean (the base shape's mean, stretched, is a half). */
+    static double meanDensity(CloudProfile p) {
+        double sum = 0;
+        int n = 64;
+        for (int i = 0; i < n; i++) {
+            sum += p.density((i + 0.5) / n);
+        }
+        return Math.max(0.5 * sum / n, 0.05);
+    }
+
+    private static double wrap(double v, int period) {
+        return v - Math.floor(v / period) * period;
+    }
+
+    /**
+     * The sky's illuminance on the ground under the clouds around (x, z) (lux, RGB, into {@code out}): the clear sky's
+     * where there are no clouds, and where there are, the sun's and the sky's light on their tops diffused through
+     * them (the two-stream transmittance of the type's column, as the clouds' march has it). The mean of 13 points of
+     * the field within {@code radius} metres. What lights the ground in the clouds' shadow (an environment's light).
+     */
+    public void skyBelowClouds(double x, double z, double radius, double[] out) {
+        double cover = 0;
+        double diffuse = 0;
+        int n = 0;
+        for (int ring = 0; ring < 3; ring++) {
+            int points = ring == 0 ? 1 : 6;
+            double r = radius * ring / 2;
+            for (int k = 0; k < points; k++) {
+                double angle = k * Math.PI / 3 + ring * 0.5;
+                weather.field().evaluate(x + r * Maths.cos(angle), 0, z + r * Maths.sin(angle), sample);
+                double c = sample.coverage();
+                double tau;
+                WeatherState state = weather.state();
+                if (sample.cloudType() == CloudType.fromChannel(state.type())) {
+                    // The preset's: its transition's two types blended, as the GPU's map has them.
+                    double t = state.progress();
+                    double s = t * t * (3 - 2 * t);
+                    tau = (1 - s) * column(state.from().cloudType(), c, sample.topHeight())
+                        + s * column(state.target().cloudType(), c, sample.topHeight());
+                } else {
+                    tau = column(sample.cloudType(), c, sample.topHeight());
+                }
+                cover += c;
+                diffuse += c / (1 + 0.75 * (1 - 0.85) * tau);
+                n++;
+            }
+        }
+        cover /= n;
+        diffuse /= n;
+        double mu = Math.max(sun[1], 0);
+        for (int c = 0; c < 3; c++) {
+            out[c] = sky[c] * (1 - cover) + (sunLight[c] * mu + sky[c]) * diffuse;
+        }
     }
 
     private static void put3(FrameBuffer f, long o, double x, double y, double z) {
@@ -454,9 +617,12 @@ public final class WeatherGpu implements AutoCloseable {
     public void close() {
         noise.close();
         textures.remove(nearTexture);
+        textures.remove(nearTypes);
+        textures.remove(farTypes);
         textures.remove(farTexture);
         textures.remove(atlasTexture);
         frame.close();
+        inputs.close();
         arena.close();
     }
 }

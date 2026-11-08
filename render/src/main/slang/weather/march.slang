@@ -45,8 +45,12 @@ static const uint MARCH_RAIN = 4;
 /** The light in the outputs is this much smaller than the radiance (cd/m^2), within half floats' range. */
 static const float OUTPUT_SCALE = 1024.0;
 
-/** The optical depth towards the sun from `p` (from the anchor): `push.lightSteps` steps of growing length. */
-float sunDepth(CloudFrame* f, float3 p, float3 toSun, bool detail)
+/**
+ * The optical depth towards the sun from `p` (from the anchor) at cloud point `here`: `push.lightSteps` steps of
+ * growing length, then the rest of the way to the layer's top at the column's mean extinction (Schneider's long step:
+ * a thick cloud's top stays dark below however short the cone).
+ */
+float sunDepth(CloudFrame* f, float3 p, float3 toSun, bool detail, CloudPoint here)
 {
     float depth = 0;
     float travelled = 0;
@@ -59,7 +63,9 @@ float sunDepth(CloudFrame* f, float3 p, float3 toSun, bool detail)
         travelled += step;
         step *= 2;
     }
-    return depth;
+    float rise = max(toSun.y, 0.05);
+    float left = max(here.top - (p.y + travelled * toSun.y), 0) / rise;
+    return depth + here.columnSigma * left;
 }
 
 /** What scatters towards the camera at a cloud point, per unit of scattering coefficient (cd/m^2 per 1/m per m). */
@@ -71,7 +77,7 @@ float3 cloudLight(CloudFrame* f, CloudPoint c, float3 p, float cosTheta, float t
     float e = 1;
     for (uint i = 0; i < max(f[0].octaves, 1u); i++)
     {
-        light += a * cloudPhase(f, c.type, cosTheta, e) * exp(-b * tauSun);
+        light += a * pointPhase(c, cosTheta, e) * exp(-b * tauSun);
         a *= f[0].msScattering;
         b *= f[0].msExtinction;
         e *= f[0].msPhase;
@@ -84,8 +90,10 @@ float3 cloudLight(CloudFrame* f, CloudPoint c, float3 p, float cosTheta, float t
     // The diffuse light deep inside: the sun's and the sky's light on the layer's top, diffused down to here, and the
     // ground's from below (two-stream), isotropic: an isotropic field of irradiance E has fluence 4E, so it scatters
     // sigma_s 4E / 4 pi. The octaves above carry the first orders; this the many after.
-    float above = c.extinction * (1 - c.height) * c.thickness * f[0].ambientDepth;
-    float below = c.extinction * c.height * c.thickness * f[0].ambientDepth;
+    // The optical depths to the layer's top and base at the column's mean extinction (the type's, not this sample's:
+    // a wisp at a thick cloud's base is as deep below its top as the cloud is).
+    float above = c.columnSigma * (1 - c.height) * c.thickness * f[0].ambientDepth;
+    float below = c.columnSigma * c.height * c.thickness * f[0].ambientDepth;
     float3 top = sun * max(f[0].sunDirection.y, 0) + f[0].skyIlluminance;
     light += (top * diffuseTransmittance(above) + ground * diffuseTransmittance(below)) / PI;
     light += flashLight(f, p, c.extinction);
@@ -147,16 +155,19 @@ void marchMain(uint3 id : SV_DispatchThreadID)
         float cosTheta = dot(dir, toSun);
         float rainPhase = henyeyGreenstein(cosTheta, f[0].rainForward);
         float across = span.y - span.x;
-        float coarse = max(across / float(push.steps), 20.0);
-        float fine = coarse * 0.35;
+        float widest = max(across / float(push.steps), 30.0);
         bool detail = (push.flags & MARCH_DETAIL) != 0;
         bool fineMode = span.x < push.near;
-        float t = span.x + jitter(id.xy, push.frameIndex) * (fineMode ? fine : coarse);
+        float first = clamp(0.02 * span.x, 30.0, widest);
+        float t = span.x + jitter(id.xy, push.frameIndex) * (fineMode ? 0.35 * first : first);
         uint empty = 0;
-        uint limitSteps = push.steps * 4;
+        uint limitSteps = push.steps * 6;
         for (uint i = 0; i < limitSteps && t < span.y && transmittance > 0.003; i++)
         {
             bool nearCamera = t < push.near;
+            // Steps grow with the distance (2 % of it), never past the slab's share: fine near, coarse far.
+            float coarse = clamp(0.02 * t, 30.0, widest);
+            float fine = coarse * 0.35;
             float step = fineMode || nearCamera ? fine : coarse;
             float dt = min(step, span.y - t);
             float3 p = push.camera + dir * (t + 0.5 * dt);
@@ -198,15 +209,18 @@ void marchMain(uint3 id : SV_DispatchThreadID)
                         ground = f[0].groundAlbedo * (f[0].sunIlluminance * sunTransmittance(f, 0)
                             * max(toSun.y, 0) + f[0].skyIlluminance) * diffuseTransmittance(column);
                     }
-                    float tau = sunDepth(f, p, toSun, detail && (fineMode || nearCamera));
-                    float albedo = 1 - f[0].types[c.type].absorption;
+                    float tau = sunDepth(f, p, toSun, detail && (fineMode || nearCamera), c);
+                    float albedo = 1 - c.absorption;
                     source += c.extinction * albedo * cloudLight(f, c, p, cosTheta, tau, sun, ground);
                 }
                 if (rain > 0)
                 {
+                    // Rain under the cloud: the sun through the clouds' shadow, and the light diffused through them.
                     float shade = push.shadow != 0 ? cloudShadow(f, push.shadow, p) : 1;
-                    source += rain * (sun * shade * rainPhase
-                        + f[0].skyIlluminance * lerp(0.1, 1.0, shade) / (4 * PI));
+                    float column = push.shadow != 0 ? columnDepth(f, push.shadow, p) : 0;
+                    float3 diffused = (f[0].sunIlluminance * sunTransmittance(f, 0) * max(toSun.y, 0)
+                        + f[0].skyIlluminance) * diffuseTransmittance(column);
+                    source += rain * (sun * shade * rainPhase + diffused / PI);
                 }
                 float stepTransmittance = exp(-sigma * dt);
                 light += transmittance * (source - source * stepTransmittance) / sigma;
@@ -219,8 +233,7 @@ void marchMain(uint3 id : SV_DispatchThreadID)
         }
         if (transmittance <= 0.003)
         {
-            light /= 1 - transmittance; // what was left goes the way of the rest, rather than to the scene
-            transmittance = 0;
+            transmittance = 0; // the scene behind is hidden; the light stays what was integrated (no energy added)
         }
     }
     float mean = weight > 1.0e-4 ? weightedDepth / weight : limit;

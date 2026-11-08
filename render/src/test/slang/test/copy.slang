@@ -25,3 +25,24 @@ void copyMain(uint3 id : SV_DispatchThreadID)
     uint4 b = uint4(round(saturate(v) * 255));
     push.output[(id.z * push.size + id.y) * push.size + id.x] = b.x | b.y << 8 | b.z << 16 | b.w << 24;
 }
+
+struct CopyFloatPush
+{
+    float4* output;
+    uint image;
+    uint size;
+};
+
+[[vk::push_constant]]
+ConstantBuffer<CopyFloatPush> floatPush;
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void copyFloatMain(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= floatPush.size || id.y >= floatPush.size)
+    {
+        return;
+    }
+    floatPush.output[id.y * floatPush.size + id.x] = textures[floatPush.image].Load(int3(id.xy, 0));
+}
