@@ -14,21 +14,24 @@ pluginManagement {
 }
 
 plugins {
-    id("truesim.settings") version "0.16.0"
+    id("truesim.settings") version "0.19.0"
 }
 
 rootProject.name = "effects-weather"
 
 // Each module is published on its own and runs without the engine: weather-clouds (cloud types, profiles, noise) and
 // weather-lightning (flashes, bolts, thunder) need only the JDK and common-math; weather-model (the weather map,
-// presets, brushes, wind, the storm simulation) adds scene components and effects-atmosphere.
-include("weather-clouds", "weather-lightning", "weather-model")
+// presets, brushes, wind, the storm simulation) adds scene components and effects-atmosphere; weather-snow is the first
+// render plugin: snow lying on surfaces as a surface shading hook of the engine.
+include("weather-clouds", "weather-lightning", "weather-model", "weather-snow")
 project(":weather-clouds").projectDir = file("clouds")
 project(":weather-lightning").projectDir = file("lightning")
 project(":weather-model").projectDir = file("model")
+project(":weather-snow").projectDir = file("snow")
 
 // Sibling checkouts are used as included builds when present (override with -Ptruesim.<repo>=<path>, or false).
-val truesimRepos = listOf("build-logic", "common-math", "common-state", "common-jobs", "scene", "effects-atmosphere")
+val truesimRepos = listOf("build-logic", "common-math", "common-state", "common-jobs", "common-graph", "scene", "ui", "engine",
+    "effects-atmosphere")
 for (repo in truesimRepos) {
     providers.gradleProperty("truesim.$repo").orElse("../$repo").get()
         .takeIf { file(it).isDirectory }?.let { includeBuild(it) }
