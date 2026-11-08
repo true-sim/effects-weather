@@ -77,6 +77,21 @@ the same field in a compute pass from the small inputs (preset parameters, cells
 gameplay, servers and the cheap tiers. The CPU reference of the 128³ shape noise takes 5 s (the GPU generator replaces
 it at startup).
 
+### weather-snow ([#4](https://github.com/true-sim/effects-weather/issues/4), part 1)
+
+The first render plugin: snow lying on surfaces as the engine's surface shading hook `weather.snow` (engine 0.192.0),
+so every way of shading (forward, the visibility buffer, transparency, ray and probe hits) sees it.
+
+- `SnowParameters` (the hook's record): the authored fields (coverage, noise scale and sharpness, slope start and end,
+  albedo, roughness, normal blend, fall direction, snowfall, melt) come from the scene (`ShadingHookComponent`,
+  `SnowContent`); `SimpleSnow` adds the occlusion map's slot and transform and the accumulation's each frame.
+- Occlusion: a depth-only `SceneDraw` of a render view of its own, orthographic along the fall direction over a square
+  round the camera, snapped to the accumulation's texels (world-anchored), drawn every frame and copied into a
+  persistent image the hook and the accumulation read.
+- Accumulation: a persistent RGBA32F image, toroidal over world columns: amount, the height of the surface the snow lies
+  on, how long it has been covered. Updated by a compute pass each frame (weather/snowmap.slang).
+- Part 2 (snow depth deformed by wheels and feet) waits for the engine's per-material displacement.
+
 ## Tiers and quality presets
 
 GPU costs are the report's estimates for the RX 9070 XT at 1080p (est.), to be replaced by the plugins' benchmarks.
