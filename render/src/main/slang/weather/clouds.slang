@@ -204,7 +204,6 @@ void gather(uint map, uint types, uint size, float2 uv, float weight, inout floa
     float2 at = uv * float(size) - 0.5;
     int2 base = int2(floor(at));
     float2 fraction = at - float2(base);
-    [ForceUnroll]
     for (uint k = 0; k < 4; k++)
     {
         int2 offset = int2(k & 1, k >> 1);
@@ -215,7 +214,6 @@ void gather(uint map, uint types, uint size, float2 uv, float weight, inout floa
         sums += w * float4(t.a, v.b, v.a, t.b); // the coverage without the anvils, rain, top, the anvils
         uint ta = typeOf(v.g);
         uint tb = typeOf(t.x);
-        [ForceUnroll]
         for (uint c = 0; c < CLOUD_TYPES; c++)
         {
             typeWeights[c] += (ta == c ? w * (1 - t.y) : 0) + (tb == c ? w * t.y : 0);
@@ -261,7 +259,6 @@ public Weather weatherAt(CloudFrame* f, float2 plane)
     uint b = 0;
     float wa = -1;
     float wbest = -1;
-    [ForceUnroll]
     for (uint t = 0; t < CLOUD_TYPES; t++)
     {
         float v = typeWeights[t];
@@ -472,7 +469,6 @@ public CloudPoint cloudAt(CloudFrame* f, float3 rel, float altitude, bool detail
     float extinctionSum = 0;
     float iceExtinction = 0;
     float waterSum = 0;
-    [ForceUnroll]
     for (uint k = 0; k < 2; k++)
     {
         if (weights[k] <= 0 || coverage <= 1.0e-3)
