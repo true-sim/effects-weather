@@ -220,8 +220,8 @@ Six fixes, each measured (tests that fail on the first round's code: run on its 
   updraft core; the phase mixes ice (HG 0.75) and droplets by their shares of the extinction. The storm model's anvil
   spreads over the first 20 minutes of maturity (`StormSimulation.ANVIL_SPREAD`; before, over the whole mature stage, so
   a cell 40 minutes old had none to speak of; the golden hash changed with it). `StormShapeTest`: a 40-minute cell's
-  column from below, sun overhead, in the Beer shadow map: anvil 1.5-3 core radii downwind 56.6 (first round 6.2),
-  core 680.
+  column from below, sun overhead, in the Beer shadow map: anvil 1.5-3 core radii downwind 49.9 (first round 6.2),
+  core 1,338.
 - **Storm cells**: towering cumulus and cumulonimbus fill their core's disc (the cover's square root) and narrow over
   their top fifth into rounded crowns; their shape also reads the base shape's Worley billows at
   `render.clouds.billowScale` (2.5) times its frequency, stretched upwards (turrets); bases stay flat (the profile's
@@ -239,7 +239,7 @@ Six fixes, each measured (tests that fail on the first round's code: run on its 
   the horizon. And the upsampling: a march texel straddling the horizon marched past a ground pixel's surface (to the
   sky beside it), so its clouds smeared onto the ground as bright streaks; clouds behind a pixel's surface are now
   dropped for it. `CloudFixesTest.theHorizonUnderADeckHasNoBrightLine` (from 200 m, 0.025 degrees a row, the
-  brightest row near the horizon over the brighter of the rows 0.3 degrees above and below it): 1.07 (first round
+  brightest row near the horizon over the brighter of the rows 0.3 degrees above and below it): 1.08 (first round
   2.05).
 - **Dusk** ([#9](https://github.com/true-sim/effects-weather/issues/9)): with effects-atmosphere (`CloudLighting.tables`,
   `AtmosphereLighting`) every sample's sunlight is its transmittance table's with the planet's shadow
