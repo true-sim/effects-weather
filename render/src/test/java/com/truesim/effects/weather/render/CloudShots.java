@@ -72,7 +72,7 @@ class CloudShots {
         shot(s, name, frames, 0);
     }
 
-    private static void shot(CloudScene s, String name, int frames, double bias) {
+    static void shot(CloudScene s, String name, int frames, double bias) {
         double ev = expose(s, frames, bias);
         s.balance();
         s.frames(frames, 1.0 / 60);
@@ -201,7 +201,7 @@ class CloudShots {
      * Renders {@code frames} frames into TRUESIM_SHOTS/{@code name}/fNNNN.png, {@code each} before each; exposed as an
      * auto exposure adapting over {@link #ADAPTATION} seconds of film time ({@code bias} EV over its choice).
      */
-    private static void film(CloudScene s, String name, int frames, int sub, double seconds, double bias,
+    static void film(CloudScene s, String name, int frames, int sub, double seconds, double bias,
         IntConsumer each) throws Exception {
         Path dir = Images.directory().resolve(name);
         Files.createDirectories(dir);

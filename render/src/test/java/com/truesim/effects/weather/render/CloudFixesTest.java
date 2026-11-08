@@ -68,6 +68,52 @@ class CloudFixesTest {
     }
 
     /**
+     * The row of pixels at the horizon under scattered cumulus from 2 m: no more alternating from pixel to pixel than
+     * the rows above and below it. Before, with the march interleaved, a pixel not marched this frame took its block's
+     * marched pixel's depths with its history: where a block straddles the horizon one of them saw the ground and the
+     * other the sky, and the upsampling weighed every other pixel of the row as the wrong one (a dotted row).
+     */
+    @Test
+    void theHorizonHasNoDottedRow() {
+        int w = 320;
+        int h = 180;
+        WeatherConfig config = WeatherConfig.forQuality(Quality.MEDIUM).withWind(WindProfile.calm());
+        try (CloudScene s = scene(w, h, config, WeatherPreset.SCATTERED)) {
+            double pitch = Math.toRadians(4);
+            s.ev100(13).sun(35, 160).look(0, 2, 0, 0, Math.tan(pitch), -1, Math.toRadians(30));
+            float[] rgb = s.frames(24, FRAME);
+            double[] alternation = new double[h];
+            for (int y = 0; y < h; y++) {
+                double steps = 0;
+                double mean = 0;
+                for (int x = 0; x + 1 < w; x++) {
+                    steps += Math.abs(s.luminance(rgb, x + 1, y) - s.luminance(rgb, x, y));
+                    mean += s.luminance(rgb, x, y);
+                }
+                alternation[y] = steps / Math.max(mean, 1e-9);
+            }
+            int horizon = h / 2 + (int) Math.round(Math.tan(pitch) / Math.tan(Math.toRadians(15)) * h / 2);
+            double worst = 0;
+            int at = 0;
+            for (int y = horizon - 3; y <= horizon + 3; y++) {
+                double around = 0;
+                for (int k = 4; k <= 10; k++) {
+                    around = Math.max(around, Math.max(alternation[y - k], alternation[y + k]));
+                }
+                double ratio = alternation[y] / Math.max(around, 1e-9);
+                if (ratio > worst) {
+                    worst = ratio;
+                    at = y;
+                }
+            }
+            System.out.printf("Horizon row: pixel-to-pixel change %.4f, %.2f times the most of the rows 4-10 away "
+                + "(row %d, horizon %d)%n", alternation[at], worst, at, horizon);
+            Images.writeShown("horizon-dots", s.shown(), w, h);
+            assertThat(worst).as("no dotted row at the horizon").isLessThan(2);
+        }
+    }
+
+    /**
      * Dusk in the atmosphere's colours. Cirrus 8 to 10 km up towards the sun 2 degrees below the horizon, still in its
      * light: the brightest clouds' colour is a mix of the atmosphere's own sunlight at their altitude (its
      * transmittance table, with ozone) and its sky's light (the sky-view table over the hemisphere), within 0.03 of the
@@ -178,17 +224,27 @@ class CloudFixesTest {
         // Interleaved, each pixel is new every fourth frame: four times the frames to converge as far.
         float[] interleaved = still(true, true, 4 * 96);
         float[] fast = still(false, true, 4 * 96);
+        // Empty-space skipping alone: the same clouds (conservative), only the samples' places shift.
+        float[] skipped = still(true, false, 96, true);
         double floor = difference(reference, later);
         double alone = difference(reference, interleaved);
         double all = difference(reference, fast);
-        System.out.printf("Cheaper march against the reference: interleave alone %.2f %%, every saving %.2f %% of the "
-            + "mean (the reference against itself 24 frames later: %.2f %%)%n", 100 * alone, 100 * all, 100 * floor);
+        double skipping = difference(reference, skipped);
+        System.out.printf("Cheaper march against the reference: interleave alone %.2f %%, skipping empty space alone "
+            + "%.2f %%, every saving %.2f %% of the mean (the reference against itself 24 frames later: %.2f %%)%n",
+            100 * alone, 100 * skipping, 100 * all, 100 * floor);
         assertThat(alone).isLessThan(0.015);
+        assertThat(skipping).isLessThan(0.01);
         assertThat(all).isLessThan(0.04);
     }
 
     /** A converged still of scattered cumulus: the reference march's settings, interleaved or not, or the defaults. */
     private static float[] still(boolean reference, boolean interleave, int frames) {
+        return still(reference, interleave, frames, !reference);
+    }
+
+    /** {@link #still}, skipping empty space or not ({@code skip}). */
+    private static float[] still(boolean reference, boolean interleave, int frames, boolean skip) {
         WeatherConfig config = WeatherConfig.forQuality(Quality.MEDIUM).withWind(WindProfile.calm());
         try (CloudScene s = scene(128, 72, config, WeatherPreset.SCATTERED)) {
             s.settings.set(CloudSettings.EVOLUTION, 0f);
@@ -199,6 +255,7 @@ class CloudFixesTest {
                     .set(k.setting("fineRatio"), 0.35f).set(k.setting("opaque"), 0.003f)
                     .set(k.setting("detailFar"), 1e6f);
             }
+            s.settings.set(Clouds.LAYERED.setting("skip"), skip);
             s.ev100(13).sun(40, 200).look(0, 2, 0, -0.3, 0.25, -1, Math.toRadians(70));
             return s.frames(frames, FRAME);
         }

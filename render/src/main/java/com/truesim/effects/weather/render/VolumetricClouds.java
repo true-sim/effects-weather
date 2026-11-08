@@ -36,7 +36,8 @@ import java.util.function.Supplier;
  *     integration and the aerial perspective at the clouds' mean depth (effects-atmosphere's tables where it lights
  *     the clouds: {@link CloudLighting#tables}). A start jittered per pixel and frame; one pixel of each
  *     {@code interleave}² block a frame (Bayer order), every pixel while a flash lights the clouds.</li>
- * <li><b>Temporal</b> (temporal.slang): blended with the history reprojected by the clouds' mean depth where the wind
+ * <li><b>Temporal</b> (temporal.slang), depth-aware (only the pixels and history taps that march to the same depth):
+ *     blended with the history reprojected by the clouds' mean depth where the wind
  *     carried them from ({@link WeatherGpu#motion}), clamped to the neighbourhood, fading with the weather time a frame
  *     spans ({@code historySeconds}); the pixels not marched this frame their history; less history while a flash
  *     lights the clouds, none when {@code temporal} is off.</li>
@@ -55,6 +56,7 @@ final class VolumetricClouds implements Technique {
     private static final int GROUND = 2;
     private static final int RAIN = 4;
     private static final int TABLES = 8;
+    private static final int SKIP = 16;
     private static final int NO_AERIAL = 0xffff;
 
     private final WeatherGpu gpu;
@@ -165,7 +167,7 @@ final class VolumetricClouds implements Technique {
                 int w = Math.min(width, (fullWidth + resolution - 1) / resolution);
                 int h = Math.min(height, (fullHeight + resolution - 1) / resolution);
                 int flags = (c.detail() ? DETAIL : 0) | (c.ground() ? GROUND : 0) | (c.rain() ? RAIN : 0)
-                    | (sky != null ? TABLES : 0) | Math.clamp(c.lightEvery(), 1, 15) << 8;
+                    | (sky != null ? TABLES : 0) | (c.skip() ? SKIP : 0) | Math.clamp(c.lightEvery(), 1, 15) << 8;
                 if (sky != null && sky.scattered() != null) {
                     marchPush.atmosphere(atmosphere.frameAddress()).aerial(ctx.sampled(sky.scattered())
                         | ctx.sampled(sky.transmitted()) << 16).apFar(aerialRange(atmosphere));
@@ -190,6 +192,7 @@ final class VolumetricClouds implements Technique {
             });
 
         g.pass("cloud temporal").read(march, Access.SAMPLED_COMPUTE).read(marchDepth, Access.SAMPLED_COMPUTE)
+            .read(depth, Access.SAMPLED_COMPUTE)
             .read(history.previous(), Access.SAMPLED_COMPUTE).read(historyDepth.previous(), Access.SAMPLED_COMPUTE)
             .write(history.current(), Access.STORAGE_WRITE).write(historyDepth.current(), Access.STORAGE_WRITE)
             .record(ctx -> {
@@ -210,7 +213,8 @@ final class VolumetricClouds implements Technique {
                     .historyDepth(ctx.sampled(historyDepth.previous())).output(ctx.storage(history.current()))
                     .outputDepth(ctx.storage(historyDepth.current())).size(w | h << 16)
                     .blend((float) blend).valid(valid ? 1 : 0).motion((float) gpu.motion(0),
-                        (float) gpu.motion(1), (float) gpu.motion(2)).sparse(sparse), (w + 7) / 8,
+                        (float) gpu.motion(1), (float) gpu.motion(2)).sparse(sparse).depth(ctx.sampled(depth))
+                    .fullSize(ctx.regionWidth(color) | ctx.regionHeight(color) << 16).range(c.range()), (w + 7) / 8,
                     (h + 7) / 8, 1);
             });
 

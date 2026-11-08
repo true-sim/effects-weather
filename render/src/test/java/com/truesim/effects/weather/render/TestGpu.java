@@ -41,14 +41,19 @@ final class TestGpu implements AutoCloseable {
         this.graph = graph;
     }
 
-    /** A device on the best GPU, validated (synchronization too), or the test skipped without Vulkan. */
+    /**
+     * A device on the best GPU, validated (synchronization too; GPU-assisted with TRUESIM_GPU_ASSISTED_VALIDATION=true),
+     * or the test skipped without Vulkan.
+     */
     static TestGpu open() {
         VulkanInstance instance;
         boolean validation = !"true".equals(System.getenv("TRUESIM_BENCHMARK"))
             && !"true".equals(System.getenv("TRUESIM_SCREENSHOTS"));
         try {
+            // TRUESIM_GPU_ASSISTED_VALIDATION=true: the layer also checks shader reads and writes as they run.
             instance = VulkanInstance.builder().applicationName("tests").validation(validation)
-                .synchronizationValidation(validation).surfaces(false).build();
+                .synchronizationValidation(validation).gpuAssistedValidation(validation
+                    && "true".equals(System.getenv("TRUESIM_GPU_ASSISTED_VALIDATION"))).surfaces(false).build();
         } catch (VulkanException | UnsatisfiedLinkError e) {
             assumeThat(e).as("no Vulkan available").isNull();
             throw e;

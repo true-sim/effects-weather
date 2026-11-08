@@ -19,7 +19,7 @@ measurements and the plan: [docs/design.md](docs/design.md).
 | `weather-lightning` | Flash events for renderers and audio, flicker from stroke trains (with exact frame averages), branching bolt geometry from a seed, thunder timing. |
 | `weather-snow` | Simple snow as the engine's surface shading hook `weather.snow` ([#4](https://github.com/true-sim/effects-weather/issues/4), part 1): a top-down occlusion map (no snow under roofs), noise thresholded by coverage (0: exactly none), slopes, albedo/roughness/normal blended before lighting in every way of shading, opt-out per material and instance, accumulation and melting over time. Engine 0.192.0. |
 | `weather-model` | The weather maps (`WeatherGrid` near and far, `GlobalWeatherGrid` on a planet), `WeatherField` (preset + storms + brushes), presets and transitions, brushes (direct and as scene components), the wind profile, the storm life cycle (`StormSimulation`) and the `Weather` facade. |
-| `weather-render` | The render techniques (engine 0.193.0): `WeatherGpu` (the maps, profiles, noise and frame record on the GPU), `Clouds` (volumetric, layered, 2D tiers), `CloudShadowMap` and `CloudShadowMask`, storm cells as towers with anvils of ice, rain shafts slanting with the wind and evaporating, `LightningLights` (flashes as scene lights) and `LightningBolts`; `CloudLighting`, the sun, sky and atmosphere the clouds need (effects-atmosphere 0.3.0's transmittance table, sky-view table and aerial perspective volume through `AtmosphereLighting`). |
+| `weather-render` | The render techniques (engine 0.193.0): `WeatherGpu` (the maps, profiles, noise and frame record on the GPU), `Clouds` (volumetric, layered, 2D tiers), `CloudShadowMap` and `CloudShadowMask`, storm cells as modelled convective clouds through their whole life (`StormTowers`: towers of turrets on a flat base, a flanking line, glaciating tops, an overshooting top, anvils of ice spreading downwind with mamma and virga), rain shafts slanting with the wind and evaporating, empty-space skipping, `LightningLights` (flashes as scene lights) and `LightningBolts`; `CloudLighting`, the sun, sky and atmosphere the clouds need (effects-atmosphere 0.3.0's transmittance table, sky-view table and aerial perspective volume through `AtmosphereLighting`). |
 
 ```java
 Weather weather = new Weather(WeatherConfig.forQuality(Quality.HIGH), WeatherDomain.flat(), WeatherPreset.FAIR);
@@ -102,4 +102,4 @@ snow.update(frameSeconds);
 Sibling checkouts of `build-logic`, `common-*`, `scene` and `effects-atmosphere` are used as included builds when
 present (override with `-Ptruesim.<repo>=<path>`, or `false` to use the published packages); otherwise the published
 packages are used, so CI needs `effects-atmosphere` 0.1.0 published first. Benchmarks run with
-`TRUESIM_BENCHMARK=true`.
+`TRUESIM_BENCHMARK=true`; the GPU tests with GPU-assisted validation with `TRUESIM_GPU_ASSISTED_VALIDATION=true`.

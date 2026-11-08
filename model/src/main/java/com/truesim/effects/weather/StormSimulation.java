@@ -18,9 +18,13 @@ import com.truesim.effects.weather.lightning.LightningEvents;
  * through three stages ({@link Stage}): <b>growing</b> (its top rises from the base to its maximum, towering cumulus
  * until 80 %, then cumulonimbus; rain starts at 70 %, the first flashes at 80 %), <b>mature</b> (full height, the
  * heaviest rain, peak flash rate, the anvil spreading downwind) and <b>dissipating</b> (rain and lightning die away,
- * the top sinks by a fifth, the anvil lingers and thins). Mature cells seed daughter cells on their flank (multicell
- * storms) where no other core stands. It drifts with the wind at half its top's height (the
- * steering level). Flashes go to a {@link LightningEvents} ring. {@link #step} allocates nothing.
+ * the top sinks by a fifth, the anvil lingers and thins away by the cell's end). Every value is a continuous function
+ * of the cell's age: no stage boundary steps anything (its cover, rain, flash rate, anvil), and nothing is left when a
+ * cell ends. Mature cells seed daughter cells on their flank where no other core stands: on the right flank of the
+ * motion where the wind blows (the flanking line of multicell storms, new cells forming on the south-west flank of
+ * storms moving east in the northern hemisphere: Browning et al. 1976, Houze 2014, ch. 8), anywhere in calm air. It
+ * drifts with the wind at half its top's height (the steering level). Flashes go to a {@link LightningEvents} ring.
+ * {@link #step} allocates nothing.
  */
 public final class StormSimulation {
 
@@ -170,6 +174,12 @@ public final class StormSimulation {
             if (stage[s] == Stage.MATURE.ordinal() && config.daughterRate() > 0
                 && rng.nextDouble() < config.daughterRate() * dt / 60.0) {
                 double theta = rng.nextDouble() * Maths.TAU;
+                double we = wind.east(steering);
+                double wn = wind.north(steering);
+                if (we * we + wn * wn > 1) {
+                    // The right flank of the motion (east, north angles), within 35 degrees either way of 100.
+                    theta = Maths.atan2(wn, we) - FLANK + (theta / Maths.TAU - 0.5) * FLANK_SPREAD;
+                }
                 double r = coreRadius[s] * rng.nextDouble(1.5, 2.5);
                 System.arraycopy(position, 3 * s, point, 0, 3);
                 domain.move(point, 0, r * Maths.cos(theta), r * Maths.sin(theta), scratch);
@@ -209,9 +219,11 @@ public final class StormSimulation {
             double g = smooth(t / growthEnd[s]);
             stage[s] = (byte) Stage.GROWING.ordinal();
             top[s] = base + (maxTop[s] - base) * g;
-            coverage[s] = 0.6 + 0.4 * g;
-            precipitation[s] = maxPrecipitation[s] * 0.5 * Math.max(0.0, (g - 0.7) / 0.3);
-            flashRate[s] = maxFlashRate[s] * 0.3 * Math.max(0.0, (g - 0.8) / 0.2);
+            // From nothing at birth (a new cumulus), full by the time it towers; rain and lightning rise to the mature
+            // stage's at its start (before, they jumped there from a half and three tenths).
+            coverage[s] = smooth(g / 0.15) * (0.6 + 0.4 * g);
+            precipitation[s] = maxPrecipitation[s] * smooth((g - 0.7) / 0.3);
+            flashRate[s] = maxFlashRate[s] * smooth((g - 0.8) / 0.2);
             anvil[s] = 0;
         } else if (t < matureEnd[s]) {
             stage[s] = (byte) Stage.MATURE.ordinal();
@@ -221,7 +233,7 @@ public final class StormSimulation {
             flashRate[s] = maxFlashRate[s];
             // The anvil spreads once the updraft reaches the tropopause: over the first 20 minutes of maturity (at
             // the top's wind, ten or more metres a second), not the whole mature stage.
-            anvil[s] = smooth((t - growthEnd[s]) / Math.min(ANVIL_SPREAD, matureEnd[s] - growthEnd[s]));
+            anvil[s] = smooth((t - growthEnd[s]) / ANVIL_SPREAD);
         } else {
             double u = (t - matureEnd[s]) / (end[s] - matureEnd[s]);
             double v = 1 - u;
@@ -230,11 +242,41 @@ public final class StormSimulation {
             coverage[s] = v;
             precipitation[s] = maxPrecipitation[s] * v * v;
             flashRate[s] = maxFlashRate[s] * v * v * v;
-            anvil[s] = 1.0;
+            // The anvil outlives the core's rain, then thins away by the cell's end (before, it stayed whole to the end
+            // and vanished with the cell). Where the mature stage was shorter than the spread, it carries on from
+            // there.
+            double spread = smooth((t - growthEnd[s]) / ANVIL_SPREAD);
+            anvil[s] = spread * (1 - smooth((u - 0.4) / 0.6));
         }
     }
 
-    /** Seconds an anvil takes to spread to its full radius once a cell matures. */
+    /**
+     * The top of cell {@code s} at age {@code age} (seconds), metres: as {@link #top} is at that age (its growth, full
+     * height, sinking by a fifth while it dissipates). For renderers placing towers of a cell's stages.
+     */
+    public double topAt(int s, double age) {
+        double base = config.baseAltitude();
+        if (age <= 0) {
+            return base;
+        }
+        if (age < growthEnd[s]) {
+            return base + (maxTop[s] - base) * smooth(age / growthEnd[s]);
+        }
+        if (age < matureEnd[s]) {
+            return maxTop[s];
+        }
+        double u = Math.min((age - matureEnd[s]) / (end[s] - matureEnd[s]), 1.0);
+        return maxTop[s] * (1 - 0.2 * u);
+    }
+
+    /** Daughter cells' flank: radians to the right of the motion, and the spread around it (100 and 70 degrees). */
+    private static final double FLANK = 100 * Maths.PI / 180;
+    private static final double FLANK_SPREAD = 70 * Maths.PI / 180;
+
+    /**
+     * Seconds an anvil takes to spread to its full radius once a cell matures (at the top's wind of ten metres a second
+     * and more, its radius); it spreads on into the dissipating stage when the mature one is shorter.
+     */
     static final double ANVIL_SPREAD = 1200;
 
     private static double smooth(double x) {
@@ -356,6 +398,31 @@ public final class StormSimulation {
     /** The cloud top, metres. */
     public double top(int s) {
         return top[s];
+    }
+
+    /** The highest top the cell reaches (at maturity), metres. */
+    public double maxTop(int s) {
+        return maxTop[s];
+    }
+
+    /** The cell's age at which it stops growing and matures, seconds. */
+    public double growthEnd(int s) {
+        return growthEnd[s];
+    }
+
+    /** The cell's age at which it starts to dissipate, seconds. */
+    public double matureEnd(int s) {
+        return matureEnd[s];
+    }
+
+    /** The cell's age at which it is gone, seconds. */
+    public double end(int s) {
+        return end[s];
+    }
+
+    /** The configuration's cloud base, metres: a cell's top rises from it. */
+    public double baseAltitude() {
+        return config.baseAltitude();
     }
 
     public double coreRadius(int s) {

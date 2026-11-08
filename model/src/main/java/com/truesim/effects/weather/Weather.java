@@ -81,6 +81,11 @@ public final class Weather {
         }
     }
 
+    /** The focus's ground point ({@link #setFocus}), coordinate {@code axis}. */
+    public double focus(int axis) {
+        return focus[axis];
+    }
+
     /** Adds a brush at the ground under (x, y, z); returns its id, or −1 when full. */
     public int addBrush(WeatherBrush brush, double x, double y, double z) {
         domain.surface(x, y, z, frame, 0);

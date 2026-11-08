@@ -77,11 +77,18 @@ public final class CloudSettings {
     public static final Setting<Float> RAIN_EVAPORATION = Setting.decimal("render.rain.evaporation", 0.35f, 0, 1,
         "the fraction of the rain that evaporates before reaching the ground (shafts thin downwards)");
     /** How much of the shaft's edge evaporates before the ground. */
-    public static final Setting<Float> RAIN_TAPER = Setting.decimal("render.rain.taper", 0.3f, 0, 0.9f,
+    public static final Setting<Float> RAIN_TAPER = Setting.decimal("render.rain.taper", 0.15f, 0, 0.9f,
         "how much of a rain shaft's lighter edge evaporates before the ground (shafts narrow downwards)");
-    /** The towers' turrets, times the base shape's frequency. */
+    /** Precipitation falling from an anvil's base, mm/h where it covers fully. */
+    public static final Setting<Float> VIRGA = Setting.decimal("render.rain.virga", 0.3f, 0, 50,
+        "mm/h of precipitation falling from a thunderstorm anvil's base where it covers fully, evaporating (virga)");
+    /** Metres below an anvil's base by which its precipitation has evaporated. */
+    public static final Setting<Float> VIRGA_DEPTH = Setting.decimal("render.rain.virgaDepth", 3000, 100, 10_000,
+        "metres below a thunderstorm anvil's base by which its precipitation has evaporated (virga)");
+    /** The turrets of towering clouds brushed onto the maps, times the base shape's frequency. */
     public static final Setting<Float> BILLOW_SCALE = Setting.decimal("render.clouds.billowScale", 2.5f, 0, 16,
-        "the frequency of towering clouds' billows (turrets), times the base shape's (0: none)");
+        "the frequency of the billows (turrets) of towering clouds brushed onto the weather maps, times the base "
+            + "shape's (0: none; storm cells have their own)");
     /** The anvils' ice water content, g/m³. */
     public static final Setting<Float> ANVIL_ICE = Setting.decimal("render.clouds.anvil.ice", 0.25f, 0, 2,
         "grams of ice per cubic metre in thunderstorm anvils (tenths near the core: optical depths of tens)");
@@ -89,11 +96,51 @@ public final class CloudSettings {
     public static final Setting<Float> ANVIL_DIAMETER = Setting.decimal("render.clouds.anvil.diameter", 60, 10, 500,
         "the effective diameter of thunderstorm anvils' ice crystals, micrometres");
     /** An anvil's depth at full cover, metres. */
-    public static final Setting<Float> ANVIL_THICKNESS = Setting.decimal("render.clouds.anvil.thickness", 2500, 0,
+    public static final Setting<Float> ANVIL_THICKNESS = Setting.decimal("render.clouds.anvil.thickness", 2000, 0,
         6000, "metres deep a thunderstorm's anvil is where it covers fully (0: no anvils)");
-    /** The overshooting dome over an updraft core, metres above the anvil. */
+    /** The overshooting top over a storm's updraft, metres above its tower at most. */
     public static final Setting<Float> ANVIL_OVERSHOOT = Setting.decimal("render.clouds.anvil.overshoot", 1200, 0,
-        5000, "metres the overshooting top of a storm's updraft rises above its anvil");
+        5000, "metres the overshooting top of a storm's updraft rises above its tower and anvil at most (early in "
+            + "its mature stage)");
+    /** An anvil's half width at its far end, over its radius. */
+    public static final Setting<Float> ANVIL_WIDTH = Setting.decimal("render.clouds.anvil.width", 1.2f, 0.1f, 4,
+        "a thunderstorm anvil's half width at its far end, over its radius (the storm's anvil factor times its core's)");
+    /** How far an anvil reaches downwind, over its radius. */
+    public static final Setting<Float> ANVIL_LENGTH = Setting.decimal("render.clouds.anvil.length", 3.5f, 0.2f, 10,
+        "how far a thunderstorm anvil reaches downwind once spread, over its radius");
+    /** How far the pouches under an anvil hang down (mamma), metres. */
+    public static final Setting<Float> MAMMATUS = Setting.decimal("render.clouds.anvil.mammatus", 500, 0, 3000,
+        "metres the pouches under a thunderstorm anvil's older part hang down at most, once it has spread (mamma; 0: "
+            + "none)");
+    /** Metres per tile of a storm's turret noise. */
+    public static final Setting<Float> TURRET_PERIOD = Setting.decimal("render.clouds.storm.turretPeriod", 8000, 500,
+        100_000, "metres per tile of storm towers' turret noise (its billows a quarter, an eighth and a sixteenth)");
+    /** How far turrets bulge out of a storm's towers. */
+    public static final Setting<Float> TURRETS = Setting.decimal("render.clouds.storm.turrets", 1.5f, 0, 4,
+        "how far turrets bulge out of storm towers, times a fifth of a tower's radius (0: smooth towers)");
+    /** Where a storm's tops turn to ice. */
+    public static final Setting<Float> GLACIATION = Setting.decimal("render.clouds.storm.glaciation", 8000, 0, 20_000,
+        "metres above which a cumulonimbus's tops turn to ice (about -35 C; at most 1.5 km below a cell's top)");
+    /** The ice water content of a storm's glaciated tops, g/m³. */
+    public static final Setting<Float> TOWER_ICE = Setting.decimal("render.clouds.storm.ice", 0.6f, 0, 4,
+        "grams of ice per cubic metre in thunderstorms' glaciated tops (crystals of the anvil's diameter)");
+    /** Metres a storm's towers lean downwind per metre up. */
+    public static final Setting<Float> TOWER_LEAN = Setting.decimal("render.clouds.storm.lean", 0.12f, 0, 1,
+        "metres storm towers lean downwind per metre up (the wind's shear)");
+    /** Metres per second a storm's turrets rise. */
+    public static final Setting<Float> TURRET_RISE = Setting.decimal("render.clouds.storm.rise", 3, 0, 50,
+        "metres per second the turrets of storm towers rise through them (their updraft's thermals)");
+    /** The march's level-of-detail switches fade over this fraction of their distances. */
+    public static final Setting<Float> LOD_BAND = Setting.decimal("render.clouds.lodBand", 0.2f, 0, 0.9f,
+        "the fraction of their distances over which the cloud march's level-of-detail switches fade (no steps)");
+    /** Terms of the clouds' light left out, for looking at the lighting (march.slang's DEBUG_* bits). */
+    public static final Setting<Integer> DEBUG = Setting.integer("render.clouds.debug", 0, 0, 31,
+        "debugging: terms of the clouds' light left out (1 the air in front, 2 the sky's light, 4 the sun diffused "
+            + "from above, 8 the sun's octaves); 16 the march's texels (transmittance, depth marched to, mean depth)");
+    /** The clouds' shadow on the air in front of them. */
+    public static final Setting<Boolean> AIR_SHADOW = Setting.bool("render.clouds.airShadow", false,
+        "the clouds' shadow on the air in front of them (off: the atmosphere's aerial perspective on the scene behind "
+            + "has none, and the two would not match at the horizon)");
     /** A median flash's first stroke's peak luminous intensity, candela. */
     public static final Setting<Float> FLASH_INTENSITY = Setting.decimal("render.lightning.intensity", 2.0e10f, 0, 1e13f,
         "the peak luminous intensity of a median flash's first stroke, candela (scaled by each flash's current)");
@@ -122,6 +169,8 @@ public final class CloudSettings {
         DETAIL_STRENGTH, EVOLUTION, OCTAVES, MS_SCATTERING, MS_EXTINCTION, MS_PHASE, AMBIENT_DEPTH, GROUND_ALBEDO,
         DENSITY_SCALE, COVERAGE_OFFSET, POWDER, RAIN_FORWARD, RAIN_EXTINCTION, RAIN_SLANT, RAIN_CURVE,
         RAIN_EVAPORATION, RAIN_TAPER, BILLOW_SCALE, ANVIL_ICE, ANVIL_DIAMETER, ANVIL_THICKNESS, ANVIL_OVERSHOOT,
+        ANVIL_WIDTH, ANVIL_LENGTH, MAMMATUS, TURRET_PERIOD, TURRETS, GLACIATION, TOWER_ICE, TOWER_LEAN, TURRET_RISE,
+        LOD_BAND, VIRGA, VIRGA_DEPTH, DEBUG, AIR_SHADOW,
         FLASH_INTENSITY, FLASH_RADIUS,
         FLASH_LEAK, FLASHES, SHADOW_SIZE, SHADOW_EXTENT, SHADOW_STEPS);
 
