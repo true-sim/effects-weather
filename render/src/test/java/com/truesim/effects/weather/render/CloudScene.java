@@ -84,6 +84,7 @@ final class CloudScene implements AutoCloseable {
     final EngineSettings settings;
     final long sun;
     final Materials materials;
+    final LightningBolts bolts;
     final int groundMaterial;
     private final GpuBuffer pixels;
     private double time;
@@ -144,7 +145,9 @@ final class CloudScene implements AutoCloseable {
         if (shadowMask) {
             port.add(gpu.own(new CloudShadowMask(clouds, view, renderer, lights, 0)));
         }
-        port.add(new Clouds(clouds, view)).add(new Capture(pixels, width, height)).output(Keys.SCENE_COLOR, output);
+        bolts = gpu.own(new LightningBolts(gpu.device, gpu.graph.frameSlots(), clouds, 3, 400));
+        port.add(new TestSky(clouds, view)).add(new Clouds(clouds, view)).add(bolts.view(view))
+            .add(new Capture(pixels, width, height)).output(Keys.SCENE_COLOR, output);
         weather.refreshAll();
     }
 
@@ -204,6 +207,7 @@ final class CloudScene implements AutoCloseable {
             time += seconds;
             nodes.update(); // the sun's node moved: the sky reads its world transform
             clouds.update(time, seconds, sky, settings); // before the scene syncs: the flashes' lights go through it
+            bolts.update();
             if (flashLights != null) {
                 flashLights.update(clouds);
                 nodes.update();

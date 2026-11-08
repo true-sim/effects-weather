@@ -166,11 +166,36 @@ class CloudRenderTest {
             double darkGround = mean(s, s.frames(2, FRAME)); // the flash over: dark again
             s.weather.lightning().add(s.time() + 0.5 * FRAME, FlashType.NEGATIVE_GROUND, 0, 3000, 0, 300, 0, 200, -30,
                 1, 7L, -1);
-            double litGround = mean(s, s.frames(1, FRAME));
+            float[] strike = s.frames(1, FRAME);
+            double litGround = mean(s, strike);
+            Images.write("strike", strike, W, H, 1.0 / 20);
+            assertThat(s.bolts.segments()).as("the ground flash's bolt").isGreaterThan(16);
             System.out.printf("Lightning: the ground at night %.4f cd/m2, under a ground flash %.2f cd/m2%n",
                 darkGround, litGround);
             assertThat(litGround).as("the flash's scene light lights the ground").isGreaterThan(
                 Math.max(1, 10 * darkGround));
+        }
+    }
+
+    @Test
+    void groundFlashesDrawTheirBolts() {
+        try (CloudScene s = new CloudScene(W, H, Quality.MEDIUM, WeatherPreset.CLEAR, false)) {
+            s.sunIlluminance(0).flashLights(1).ground(0.25f);
+            s.look(0, 2, 4000, 0, 0.35, -1, Math.toRadians(60));
+            s.frames(2, FRAME);
+            s.weather.lightning().add(s.time() + 0.5 * FRAME, FlashType.NEGATIVE_GROUND, 0, 2500, 0, 100, 0, 0, -30,
+                1, 3L, -1);
+            float[] rgb = s.frames(1, FRAME);
+            Images.write("bolt", rgb, W, H, 1.0 / 2000);
+            int bright = 0;
+            for (int y = 0; y < H; y++) {
+                for (int x = 0; x < W; x++) {
+                    bright += s.luminance(rgb, x, y) > 100 ? 1 : 0;
+                }
+            }
+            System.out.printf("Bolt: %d segments, %d bright pixels%n", s.bolts.segments(), bright);
+            assertThat(s.bolts.segments()).isGreaterThan(16);
+            assertThat(bright).as("the bolt's pixels").isGreaterThan(H / 2);
         }
     }
 
