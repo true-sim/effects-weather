@@ -86,10 +86,13 @@ so every way of shading (forward, the visibility buffer, transparency, ray and p
   albedo, roughness, normal blend, fall direction, snowfall, melt) come from the scene (`ShadingHookComponent`,
   `SnowContent`); `SimpleSnow` adds the occlusion map's slot and transform and the accumulation's each frame.
 - Occlusion: a depth-only `SceneDraw` of a render view of its own, orthographic along the fall direction over a square
-  round the camera, snapped to the accumulation's texels (world-anchored), drawn every frame and copied into a
-  persistent image the hook and the accumulation read.
+  round the camera, its origin snapped to whole map texels across the fall (the texels on a grid fixed in the world,
+  for any fall direction), drawn every frame and copied into a persistent image the hook and the accumulation read.
+- Columns: each frame a compute pass takes every map texel's surface point to the world column under it, the highest
+  per column by an atomic max into a transient buffer: the topmost surface in the column the snow reaches, the same
+  whatever the camera does.
 - Accumulation: a persistent RGBA32F image, toroidal over world columns: amount, the height of the surface the snow lies
-  on, how long it has been covered. Updated by a compute pass each frame (weather/snowmap.slang).
+  on, how long it has been covered. Updated by a compute pass each frame from the columns (weather/snowmap.slang).
 - Part 2 (snow depth deformed by wheels and feet) waits for the engine's per-material displacement.
 
 ## Tiers and quality presets

@@ -38,7 +38,7 @@ public struct SnowParameters
     public uint accumulationSize;                   // its texels a side (0: none: fully accumulated)
     public float bias;                              // depth (map units) below the topmost surface still reached
     public float accumulationTexel;                 // metres per accumulation texel
-    public float2 accumulationOffset;               // the origin's texel, in texels (its cell mod the size)
+    public float2 accumulationOffset;               // the origin in texels: its cell mod the size, and its offset in it
     public float3 originHigh;                       // the map's origin, world: high part
     public float3 originLow;                        // and the rest
     public float4 toMapX;                           // rows of the map's view-projection, from origin-relative positions

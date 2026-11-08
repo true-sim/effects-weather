@@ -57,17 +57,22 @@ snow.update(frameSeconds);
   keeps its texel while it stays in the area): snow fills in while it snows (`snowfall`, `weather.snow.fillSeconds`),
   melts (`melt`, `weather.snow.meltSeconds`), stays on what something drives over, and a surface revealed (a parked car
   leaving) or a cover staying longer than `weather.snow.coverSeconds` starts bare. The effective coverage is the scene's
-  times the column's amount. New columns start at `weather.snow.initial`.
+  times the column's amount. New columns start at `weather.snow.initial`. A column's surface is the topmost one in it
+  the snow reaches: every map texel's surface point, wherever along a slanted fall it lies, taken to the column under it.
+  The map's texels lie on a grid fixed in the world (its origin snapped to whole texels across the fall), so the camera
+  moving, up and down too, and the wind turning cover and reveal nothing; a column the snow no longer reaches (in the
+  lee, once the wind turns) keeps what lies on it.
 - **Not yet** (part 2 of #4, waiting for the engine's per-material displacement): snow depth, deformation by wheels and
   feet. Also not yet: redrawing the map only when static geometry changes (skipping its draw with
-  `GraphBuilder.masked` left the main view black once the draw came back, engine 0.192.0), cascades of the map for distance (one map; beyond it every point is reached), and the
-  accumulation sampling the map at the column's centre at the origin's height (exact for vertical fall, off by
-  tan(slant) times the height difference for slanted snow).
+  `GraphBuilder.masked` left the main view black once the draw came back, engine 0.192.0), cascades of the map for
+  distance (one map; beyond it every point is reached).
 - Tests: `SimpleSnowTest` (GPU: open ground white and ground under a roof bare in forward shading and the visibility
   buffer, the map's bias reaching past the roof snows under it; coverage 0 bit for bit as without the hook; vertical
   faces bare, tops and level ground white; patches growing with coverage; a refusing material and a switched-off
-  instance bare; accumulating and melting over time; the scene's component). Pictures: `SnowScreenshots`
-  (`TRUESIM_SCREENSHOTS=true`, `-Pscreenshots=<directory>`).
+  instance bare; accumulating and melting over time; slanted snow filling in sloping ground when the wind turns; a
+  settled cover unchanged by the camera wandering and rising across whole metres, straight and slanted; the scene's
+  component). Pictures: `SnowScreenshots`, films as frame
+  sequences: `SnowVideos` (`TRUESIM_SCREENSHOTS=true`, `-Pscreenshots=<directory>`).
 
 ## Building
 
