@@ -285,6 +285,12 @@ final class CloudScene implements AutoCloseable {
         public void build(GraphBuilder g) {
             Image color = g.modify(Keys.SCENE_COLOR);
             g.pass("capture").read(color, Access.TRANSFER_SRC).sideEffects().record(ctx -> {
+                // The frame before copied into the same host buffer: its write first.
+                com.truesim.engine.vulkan.Barriers.memory(ctx.unsafe().commands(),
+                    org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT);
                 try (var stack = stackPush()) {
                     VkBufferImageCopy.Buffer region = VkBufferImageCopy.calloc(1, stack);
                     region.bufferRowLength(width).imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
