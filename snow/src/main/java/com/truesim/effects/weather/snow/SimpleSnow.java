@@ -9,6 +9,8 @@ import com.truesim.common.graph.Id;
 import com.truesim.effects.weather.snow.hooks.SnowMapPush;
 import com.truesim.effects.weather.snow.hooks.SnowParameters;
 import com.truesim.engine.graph.Access;
+import com.truesim.engine.graph.Buffer;
+import com.truesim.engine.graph.BufferAccess;
 import com.truesim.engine.graph.GraphBuilder;
 import com.truesim.engine.graph.Image;
 import com.truesim.engine.graph.ImageDesc;
@@ -71,8 +73,8 @@ public final class SimpleSnow implements Technique, AutoCloseable {
 
     private static final ValueLayout.OfInt I32 = ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
     private static final ValueLayout.OfFloat F32 = ValueLayout.JAVA_FLOAT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
-    /** The map's frame data (snowmap.slang's SnowMapFrame): three float4 rows. */
-    private static final int FRAME_BYTES = 48;
+    /** The map's frame data (snowmap.slang's SnowMapFrame): five float4 rows. */
+    private static final int FRAME_BYTES = 80;
 
     private final SceneGeometry geometry;
     private final SceneView view;
@@ -87,7 +89,7 @@ public final class SimpleSnow implements Technique, AutoCloseable {
     private float area;
     private int mapSize;
     private int size;
-    // The map as drawn: its origin (world, and its accumulation cell) and fall direction
+    // The map as drawn: its origin (world, and the accumulation cell it is in)
     private boolean drawn;
     private double originX;
     private double originY;
@@ -95,7 +97,6 @@ public final class SimpleSnow implements Technique, AutoCloseable {
     private int originCellX;
     private int originCellZ;
     private final float[] fall = {0, -1, 0};
-    private final float[] fallDrawn = {0, 0, 0};
     // The accumulation: its window (first cell), last frame's, whether there was one; seconds not yet accumulated
     private int windowX;
     private int windowZ;
@@ -151,35 +152,52 @@ public final class SimpleSnow implements Technique, AutoCloseable {
         }
         Camera camera = view.camera();
         double texel = texel();
-        int cellX = (int) Math.floor(camera.position(0) / texel);
-        int cellZ = (int) Math.floor(camera.position(2) / texel);
-        double height = settings.get(SnowSettings.MAP_HEIGHT);
-        boolean moved = !drawn || cellX != originCellX || cellZ != originCellZ
-            || Math.abs(camera.position(1) - originY) > 0.25 * height || fall[0] != fallDrawn[0]
-            || fall[1] != fallDrawn[1] || fall[2] != fallDrawn[2];
-        if (moved) {
-            originCellX = cellX;
-            originCellZ = cellZ;
-            windowX = cellX - size / 2;
-            windowZ = cellZ - size / 2;
-            originX = cellX * texel;
-            originY = Math.floor(camera.position(1));
-            originZ = cellZ * texel;
-            System.arraycopy(fall, 0, fallDrawn, 0, 3);
-        }
-        // Down the fall direction from above the origin; any up not along it
-        double fx = fallDrawn[0];
-        double fy = fallDrawn[1];
-        double fz = fallDrawn[2];
+        // The accumulation's window: the cells round the camera's
+        windowX = (int) Math.floor(camera.position(0) / texel) - size / 2;
+        windowZ = (int) Math.floor(camera.position(2) / texel) - size / 2;
+        // The map's axes as the camera builds them: back (against the fall), right, up; any up not along the fall
+        double fx = fall[0];
+        double fy = fall[1];
+        double fz = fall[2];
         boolean alongZ = Math.abs(fz) > 0.9;
+        double ux = alongZ ? 1 : 0;
+        double uz = alongZ ? 0 : -1;
+        double rx = -uz * -fy;
+        double ry = uz * -fx - ux * -fz;
+        double rz = ux * -fy;
+        double rl = Math.sqrt(rx * rx + ry * ry + rz * rz);
+        rx /= rl;
+        ry /= rl;
+        rz /= rl;
+        double tx = -fy * rz + fz * ry;
+        double ty = -fz * rx + fx * rz;
+        double tz = -fx * ry + fy * rx;
+        // The origin: the camera snapped to whole map texels across the fall, so that the map's texels lie on a grid
+        // fixed in the world whatever the camera does (it moving finds the same surfaces in the same texels), and to
+        // whole metres along it
+        double mapTexel = 2.0 * area / mapSize;
+        double cx = camera.position(0);
+        double cy = camera.position(1);
+        double cz = camera.position(2);
+        double across = Math.rint((rx * cx + ry * cy + rz * cz) / mapTexel) * mapTexel;
+        double up = Math.rint((tx * cx + ty * cy + tz * cz) / mapTexel) * mapTexel;
+        double along = Math.rint(fx * cx + fy * cy + fz * cz);
+        originX = across * rx + up * tx + along * fx;
+        originY = across * ry + up * ty + along * fy;
+        originZ = across * rz + up * tz + along * fz;
+        originCellX = (int) Math.floor(originX / texel);
+        originCellZ = (int) Math.floor(originZ / texel);
+        double height = settings.get(SnowSettings.MAP_HEIGHT);
         map.position(originX, originY, originZ).setOrthographic(-fx * height, -fy * height, -fz * height, fx, fy, fz,
-            alongZ ? 1 : 0, 0, alongZ ? 0 : -1, area, area, settings.get(SnowSettings.MAP_DEPTH), mapSize, mapSize);
+            ux, 0, uz, area, area, settings.get(SnowSettings.MAP_DEPTH), mapSize, mapSize);
         float[] vp = map.viewProjection();
         float[] inverse = map.inverseViewProjection();
         for (int column = 0; column < 4; column++) {
             frame.putFloat(4L * column, vp[4 * column]);
             frame.putFloat(16 + 4L * column, vp[4 * column + 1]);
             frame.putFloat(32 + 4L * column, inverse[4 * column + 1]);
+            frame.putFloat(48 + 4L * column, inverse[4 * column]);
+            frame.putFloat(64 + 4L * column, inverse[4 * column + 2]);
         }
         drawn = true;
     }
@@ -215,6 +233,7 @@ public final class SimpleSnow implements Technique, AutoCloseable {
             size));
         String shader = "shaders/weather/snowmap.spv";
         Pipeline capture = g.computeProgram(shader, "captureMain", SnowMapPush.BYTES);
+        Pipeline gather = g.computeProgram(shader, "columnsMain", SnowMapPush.BYTES);
         Pipeline accumulate = g.computeProgram(shader, "accumulateMain", SnowMapPush.BYTES);
         int maps = mapSize;
         // Drawn every frame: what moves (cars, people) shelters the ground under it at once. (Skipping the draw on
@@ -227,11 +246,19 @@ public final class SimpleSnow implements Technique, AutoCloseable {
         g.pass("snow occlusion").read(depth, Access.SAMPLED_COMPUTE).write(occlusion, Access.STORAGE_WRITE)
             .when(() -> drawn).record(ctx -> ctx.dispatch(capture, capturePush.depth(ctx.sampled(depth))
                 .occlusion(ctx.storage(occlusion)).mapSize(maps), (maps + 7) / 8, (maps + 7) / 8, 1));
+        // Each column's topmost reached surface: cleared, then every map texel's taken to its column
+        Buffer columns = g.createBuffer("snow columns", 4L * size * size);
+        g.pass("snow columns clear").write(columns, BufferAccess.TRANSFER_DST).when(() -> drawn)
+            .record(ctx -> ctx.fill(columns, 0));
+        SnowMapPush columnsPush = new SnowMapPush();
+        g.pass("snow columns").read(occlusion, Access.SAMPLED_COMPUTE).write(columns, BufferAccess.STORAGE_WRITE)
+            .when(() -> drawn).record(ctx -> ctx.dispatch(gather, columnsPush(ctx, columnsPush, occlusion, columns),
+                (maps + 7) / 8, (maps + 7) / 8, 1));
         SnowMapPush push = new SnowMapPush();
         int texels = size;
-        g.pass("snow accumulation").read(occlusion, Access.SAMPLED_COMPUTE)
+        g.pass("snow accumulation").read(occlusion, Access.SAMPLED_COMPUTE).read(columns, BufferAccess.STORAGE_READ)
             .write(accumulation, Access.STORAGE_WRITE).when(() -> drawn).record(ctx -> {
-                accumulate(ctx, push, occlusion, accumulation);
+                accumulate(ctx, push, occlusion, accumulation, columns);
                 ctx.dispatch(accumulate, push, (texels + 7) / 8, (texels + 7) / 8, 1);
             });
         ShadingHooks.of(device).add(g, HOOK, new ShadingHookSource() {
@@ -261,8 +288,13 @@ public final class SimpleSnow implements Technique, AutoCloseable {
                 into.set(F32, offset + SnowParameters.BIAS.offset(),
                     settings.get(SnowSettings.BIAS) / settings.get(SnowSettings.MAP_DEPTH));
                 into.set(F32, offset + SnowParameters.ACCUMULATION_TEXEL.offset(), (float) texel());
-                put(into, offset, SnowParameters.ACCUMULATION_OFFSET, 0, Math.floorMod(originCellX, size));
-                put(into, offset, SnowParameters.ACCUMULATION_OFFSET, 1, Math.floorMod(originCellZ, size));
+                // The origin's cell and its offset in it, in texels: the shading's position over the texel is then the
+                // world's, whatever the origin
+                double texel = texel();
+                put(into, offset, SnowParameters.ACCUMULATION_OFFSET, 0,
+                    (float) (Math.floorMod(originCellX, size) + (originX - originCellX * texel) / texel));
+                put(into, offset, SnowParameters.ACCUMULATION_OFFSET, 1,
+                    (float) (Math.floorMod(originCellZ, size) + (originZ - originCellZ * texel) / texel));
                 origin(into, offset, 0, originX);
                 origin(into, offset, 1, originY);
                 origin(into, offset, 2, originZ);
@@ -303,18 +335,24 @@ public final class SimpleSnow implements Technique, AutoCloseable {
         melt = authored.melt();
     }
 
+    /** The map's frame, the window and the origin, for the columns and the accumulation. */
+    private SnowMapPush columnsPush(PassContext ctx, SnowMapPush push, Image occlusion, Buffer columns) {
+        double texel = texel();
+        return push.frame(frame.deviceAddress()).occlusion(ctx.sampled(occlusion)).mapSize(mapSize)
+            .columns(ctx.address(columns)).size(size).windowX(windowX).windowZ(windowZ).originX(originCellX)
+            .originZ(originCellZ).originFractionX((float) (originX - originCellX * texel))
+            .originFractionZ((float) (originZ - originCellZ * texel)).texel((float) texel).originY((float) originY);
+    }
+
     /** The accumulation's push for this frame; the time since the last one is taken. */
     @AllowImpure("takes the time passed and the window's last position: the next frame accumulates from there")
-    private void accumulate(PassContext ctx, SnowMapPush push, Image occlusion, Image accumulation) {
+    private void accumulate(PassContext ctx, SnowMapPush push, Image occlusion, Image accumulation, Buffer columns) {
         float fill = 1 / settings.get(SnowSettings.FILL_SECONDS);
         float melting = 1 / settings.get(SnowSettings.MELT_SECONDS);
-        push.frame(frame.deviceAddress()).occlusion(ctx.sampled(occlusion)).mapSize(mapSize)
-            .accumulation(ctx.storage(accumulation)).size(size).fresh(fresh ? 1 : 0).windowX(windowX)
-            .windowZ(windowZ).previousX(previousX).previousZ(previousZ).originX(originCellX).originZ(originCellZ)
-            .texel((float) texel()).seconds((float) pending).fill(fill * Math.clamp(snowfall, 0, 1))
+        columnsPush(ctx, push, occlusion, columns).accumulation(ctx.storage(accumulation)).fresh(fresh ? 1 : 0)
+            .previousX(previousX).previousZ(previousZ).seconds((float) pending).fill(fill * Math.clamp(snowfall, 0, 1))
             .melt(melting * Math.clamp(melt, 0, 1)).coverSeconds(settings.get(SnowSettings.COVER_SECONDS))
-            .surfaceChange(settings.get(SnowSettings.SURFACE_CHANGE)).initial(settings.get(SnowSettings.INITIAL))
-            .originY((float) originY);
+            .surfaceChange(settings.get(SnowSettings.SURFACE_CHANGE)).initial(settings.get(SnowSettings.INITIAL));
         pending = 0;
         fresh = false;
         previousX = windowX;

@@ -55,6 +55,18 @@ class SimpleSnowTest {
     private static final int SNOW = 80;
     private static final int BARE = 40;
 
+    /** Fall directions: straight down, and slanted 45 degrees by the wind. */
+    enum Fall {
+        STRAIGHT(new Vec3(0, -1, 0)),
+        SLANTED(new Vec3(1, -1, 0));
+
+        final Vec3 direction;
+
+        Fall(Vec3 direction) {
+            this.direction = direction;
+        }
+    }
+
     /** The ways of shading a view. */
     enum Shading { FORWARD, VISIBILITY_BUFFER }
 
@@ -255,6 +267,58 @@ class SimpleSnowTest {
             frames(1);
         }
         assertThat(red(SIZE / 2, SIZE / 2)).as("after 15 s of a 10 s melt").isLessThan(BARE);
+    }
+
+    @Test
+    void slantedSnowFillsInOpenSlopingGroundAsStraightSnowDoesWhenTheWindTurns() {
+        // Ground rising 12 degrees towards +x, open to the sky; looking straight down at it from 4 m
+        double tilt = Math.toRadians(12);
+        rig.scene().set(0, box, ground, 0, -0.1, 0, 0, 0, (float) Math.sin(tilt / 2), (float) Math.cos(tilt / 2), 40,
+            0.1f, 40);
+        rig.graph().settings().set(SnowSettings.INITIAL, 0f);
+        rig.graph().settings().set(SnowSettings.FILL_SECONDS, 10f);
+        // It starts snowing straight down, then the wind turns the fall 45 degrees towards +x (up the slope)
+        values(SnowParameters.DEFAULTS.withCoverage(1).withSnowfall(1));
+        look(Shading.FORWARD, 0, 4, 0, 0, -1, 0);
+        frames(3);
+        assertThat(share()).as("nothing has fallen yet").isLessThan(0.05);
+        values(SnowParameters.DEFAULTS.withCoverage(1).withSnowfall(1).withFallDirection(new Vec3(1, -1, 0)));
+        for (int i = 0; i < 4; i++) {
+            snow.update(5);
+            rig.frames(1);
+        }
+        assertThat(share()).as("open ground after 20 s of a 10 s fill, slanted").isGreaterThan(0.95);
+    }
+
+    @ParameterizedTest
+    @EnumSource(Fall.class)
+    void aSettledSnowCoverStaysAsTheCameraMovesAndRisesAndFalls(Fall fall) {
+        groundAndRoof();
+        values(SnowParameters.DEFAULTS.withCoverage(1).withFallDirection(fall.direction));
+        // Over the roof's edge from 6.5 m: the roof's top on the left, the open ground on the right
+        look(Shading.FORWARD, -1, 6.5, 0, 0, -1, 0);
+        frames(3);
+        BufferedImage settled = rig.target().shot();
+        // The camera wanders across cells and up and down across whole metres, a frame at each place, and comes back
+        for (int i = 1; i <= 24; i++) {
+            double a = 2 * Math.PI * i / 24;
+            camera.position(-1 + 1.3 * Math.sin(a), 6.5 + 2.2 * Math.sin(3 * a), 0.9 * Math.sin(2 * a));
+            snow.update(0.1);
+            rig.frames(1);
+        }
+        camera.position(-1, 6.5, 0);
+        frames(2);
+        BufferedImage after = rig.target().shot();
+        int changed = 0;
+        for (int y = 0; y < SIZE; y++) {
+            for (int x = 0; x < SIZE; x++) {
+                int was = (settled.getRGB(x, y) >> 16) & 255;
+                int now = (after.getRGB(x, y) >> 16) & 255;
+                changed += Math.abs(was - now) > 20 ? 1 : 0;
+            }
+        }
+        assertThat(changed).as("pixels changed by moving the camera, falling %s", fall).isLessThanOrEqualTo(SIZE);
+        assertThat(share()).as("snow on the roof and the open ground").isGreaterThan(0.4);
     }
 
     @Test
