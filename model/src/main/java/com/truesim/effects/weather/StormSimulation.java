@@ -219,7 +219,9 @@ public final class StormSimulation {
             coverage[s] = 1.0;
             precipitation[s] = maxPrecipitation[s];
             flashRate[s] = maxFlashRate[s];
-            anvil[s] = smooth((t - growthEnd[s]) / (matureEnd[s] - growthEnd[s]));
+            // The anvil spreads once the updraft reaches the tropopause: over the first 20 minutes of maturity (at
+            // the top's wind, ten or more metres a second), not the whole mature stage.
+            anvil[s] = smooth((t - growthEnd[s]) / Math.min(ANVIL_SPREAD, matureEnd[s] - growthEnd[s]));
         } else {
             double u = (t - matureEnd[s]) / (end[s] - matureEnd[s]);
             double v = 1 - u;
@@ -231,6 +233,9 @@ public final class StormSimulation {
             anvil[s] = 1.0;
         }
     }
+
+    /** Seconds an anvil takes to spread to its full radius once a cell matures. */
+    static final double ANVIL_SPREAD = 1200;
 
     private static double smooth(double x) {
         double t = Math.clamp(x, 0.0, 1.0);

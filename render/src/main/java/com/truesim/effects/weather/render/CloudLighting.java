@@ -3,13 +3,13 @@ package com.truesim.effects.weather.render;
 import com.truesim.common.math.Maths;
 
 /**
- * What the clouds need from the sky and the atmosphere, as an interface until effects-atmosphere's render techniques
- * (Hillaire 2020: transmittance table, sky-view and aerial perspective volume) take its place: the sun and the light
- * at a point (its direction, its illuminance outside the atmosphere, the atmosphere's transmittance to the point), the
- * sky's light from above, and the aerial perspective between the camera and the clouds. The GPU evaluates the
- * transmittance and the aerial perspective from {@link #atmosphere()}'s coefficients analytically (the Chapman
- * function after Schüler 2012); an atmosphere with tables of its own supplies them through the same fields once it
- * lands. Read once a frame, on the thread that updates {@link WeatherGpu}; implementations allocate nothing there.
+ * What the clouds need from the sky and the atmosphere: the sun (its direction, its illuminance outside the
+ * atmosphere), the sky's light from above, and the air between the camera and the clouds. With effects-atmosphere
+ * ({@link #tables()}: {@link AtmosphereLighting}) the clouds read its tables (Hillaire 2020): every sample's sunlight
+ * through its transmittance table with the planet's shadow, and its aerial perspective volume in front of them. Without
+ * ({@link SceneSky}) the GPU evaluates the transmittance and the aerial perspective from {@link #atmosphere()}'s
+ * coefficients analytically (the Chapman function after Schüler 2012). Read once a frame, on the thread that updates
+ * {@link WeatherGpu}; implementations allocate nothing there.
  */
 public interface CloudLighting {
 
@@ -22,8 +22,16 @@ public interface CloudLighting {
     /** The sky's radiance near the horizon (cd/m², RGB): the aerial perspective's in-scattered light. */
     void horizon(double[] radiance);
 
-    /** The atmosphere's media, for the transmittance and aerial perspective. */
+    /** The atmosphere's media, for the analytic transmittance and aerial perspective. */
     Atmosphere atmosphere();
+
+    /**
+     * effects-atmosphere's atmosphere whose tables light the clouds and lie in front of them, or null (analytic). The
+     * clouds then request its tables and aerial perspective volume ({@code SkyViewLut}) in their views.
+     */
+    default com.truesim.effects.atmosphere.render.Atmosphere tables() {
+        return null;
+    }
 
     /**
      * Scene units per lux and per cd/m² (1: physical units). The illuminances above are in scene units already; the

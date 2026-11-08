@@ -97,7 +97,7 @@ so every way of shading (forward, the visibility buffer, transparency, ray and p
 
 ### weather-render (branch `clouds-render`)
 
-The render techniques, on engine 0.192.0, using only its generic features (technique registry, frame graph, dynamic
+The render techniques, on engine 0.193.0, using only its generic features (technique registry, frame graph, dynamic
 textures, the shadow table's screen-space masks, the scene's lights). Flat worlds; a planet's maps are not drawn yet.
 
 - **`WeatherGpu`**: a world's weather on the GPU. The near and far maps are `WeatherField` evaluated on the GPU every
@@ -163,9 +163,7 @@ textures, the shadow table's screen-space masks, the scene's lights). Flat world
   the same factor), its sky's mean radiance where its fog read it back; the pictures use its `AtmosphereSky`,
   `AerialPerspective` (the media hook on surfaces) and `SkyCapture` (the environment, dimmed by the clouds' diffused
   light: `WeatherGpu.skyBelowClouds`). `SceneSky` stays for scenes without it (a scene sun node over an exponential
-  atmosphere). Still analytic in clouds.slang: the per-sample transmittance to the sun and the clouds' own aerial
-  perspective (Chapman function on the atmosphere's coefficients) instead of its transmittance table and aerial
-  perspective volume (`atmosphere/atmosphere.slang`); the follow-up of #9.
+  atmosphere). Since the second round the clouds read effects-atmosphere's tables where it lights them (below).
 - **Measured** (`CloudBenchmark`, TRUESIM_BENCHMARK=true, RX 9070 XT, 2026-11-08, 1920 x 1080, ULTRA weather maps,
   march at half resolution; medians of 60 frames after 40, ranges of 3 rounds; the frame includes forward shading of
   the ground with the environment's light, the test sky, the GPU weather maps (1024² and 128² a frame), the depth draw
@@ -206,6 +204,97 @@ textures, the shadow table's screen-space masks, the scene's lights). Flat world
   frame-to-frame change exceeds 4 times its own median over the 8 frame pairs around it and 0.03): fair to overcast over
   10 minutes 802 before, 33 after; a storm rolling in, largest block change 0.996 before (whole regions switching),
   0.33 after.
+
+### weather-render, second round (branch `clouds-round2`)
+
+Six fixes, each measured (tests that fail on the first round's code: run on its tree with the same test scene).
+
+- **Anvils** ([#6](https://github.com/true-sim/effects-weather/pull/6) drew a mature cell's anvil as cirrus, optical
+  depth 1-6): a cumulonimbus's anvil is a thick ice cloud. The GPU field writes each cell's anvil as a channel of its
+  own (the types map's blue; its alpha the cover of everything but the anvils; the coverage channel stays
+  `WeatherField`'s, discs included, for gameplay): a plume leaving the core along the wind at the top, from the core's
+  width to the anvil's, rounded at its far end, thinning downwind. The clouds draw it as ice under the tropopause (the
+  cells' tops): `render.clouds.anvil.ice` 0.25 g/m³ of crystals of `render.clouds.anvil.diameter` 60 µm
+  (`σ = 3·IWC / 2ρ_ice r`: 13.6 per km; Heymsfield's anvils hold tenths of a gram), `thickness` 2.5 km at full cover,
+  a sheet whose base and edges the shape breaks (not puffs), an overshooting dome of `overshoot` 1.2 km over the
+  updraft core; the phase mixes ice (HG 0.75) and droplets by their shares of the extinction. The storm model's anvil
+  spreads over the first 20 minutes of maturity (`StormSimulation.ANVIL_SPREAD`; before, over the whole mature stage, so
+  a cell 40 minutes old had none to speak of; the golden hash changed with it). `StormShapeTest`: a 40-minute cell's
+  column from below, sun overhead, in the Beer shadow map: anvil 1.5-3 core radii downwind 56.6 (first round 6.2),
+  core 680.
+- **Storm cells**: towering cumulus and cumulonimbus fill their core's disc (the cover's square root) and narrow over
+  their top fifth into rounded crowns; their shape also reads the base shape's Worley billows at
+  `render.clouds.billowScale` (2.5) times its frequency, stretched upwards (turrets); bases stay flat (the profile's
+  ramp); the tower's own top widening (`anvilSpread`) is 0.6 instead of 1.5 now that the anvil is drawn on its own.
+  Rain shafts: the rain at a point left the base upwind, `render.rain.slant` 0.25 m per metre fallen plus
+  `render.rain.curve` 0.35 more per fallen fraction of the base (the shaft slants and curves downwind); a fraction
+  `render.rain.evaporation` 0.35 evaporates by the ground (thinner downwards) and the lighter edge first
+  (`render.rain.taper` 0.3: narrower downwards); it falls in curtains (the base shape at the base's height, carried
+  with the rain). The shot scripts ran storms by step count, half the minutes at ULTRA's half-second steps: now by
+  weather time (`CloudShots.run`).
+- **The bright line at the horizon below a deck**: the deck was flat, so it ended 0.23 degrees above the horizontal at
+  the march's 200 km while effects-atmosphere's sky is a planet's (its horizon 0.45 degrees down from 200 m): rays in
+  between met neither cloud nor ground and showed the bright horizon sky. The clouds now lie on the planet: a sample's
+  altitude is `y + d²/2R` from the camera's ground point, the march's span the curved shell's; a deck reaches down to
+  the horizon. And the upsampling: a march texel straddling the horizon marched past a ground pixel's surface (to the
+  sky beside it), so its clouds smeared onto the ground as bright streaks; clouds behind a pixel's surface are now
+  dropped for it. `CloudFixesTest.theHorizonUnderADeckHasNoBrightLine` (from 200 m, 0.025 degrees a row, the
+  brightest row near the horizon over the brighter of the rows 0.3 degrees above and below it): 1.07 (first round
+  2.05).
+- **Dusk** ([#9](https://github.com/true-sim/effects-weather/issues/9)): with effects-atmosphere (`CloudLighting.tables`,
+  `AtmosphereLighting`) every sample's sunlight is its transmittance table's with the planet's shadow
+  (`transmittanceToLight` at the sample's planet position), the ground's too; the air in front of the clouds is its
+  aerial perspective volume at their mean depth (as its media hook reads it), continued past the volume's range by
+  its own integration (`segment`); and the clouds' sky light is its sky-view table integrated over the hemisphere
+  (weather/skylight.slang, read back into the next frames: `WeatherGpu.skyLight`), by day and in twilight. Before, the
+  sky light was an estimate that is zero once the sun sets, so clouds were lit by the red sun alone and black
+  elsewhere, and AgX/ACES turned the red into saturated pink. The ambient's "no deeper than towards the sun" (a tower's
+  side) applies only while the sun is up. `SceneSky` keeps the analytic Chapman path. `CloudFixesTest.cloudsAtDuskHave
+  TheAtmospheresColours`: sunlit cirrus at 9 km, sun 2 degrees down, 0.013 in chromaticity from the mix of the table's
+  sunlight and the sky light; altocumulus overhead in the planet's shadow (sun 4 degrees down) 0.053 from the sky
+  light's colour (first round: no sky light at all). The 2D tier stays analytic.
+- **The test scenes**: the ground grassland's albedo (0.20, 0.22, 0.12); the environment the sky's light under the
+  clouds, uniform (`WeatherGpu.skyBelowClouds`, its clear part the sky light above, its cloudy part the sunlight on the
+  tops through the atmosphere diffused through them: a captured clear sky only dimmed lit the shade under a storm
+  navy); the pictures exposed as an auto exposure would (effects-atmosphere's `AtmosphereExposure`: the EV100 of the
+  frame's log-average luminance, eased over a second in films), white balanced, tone mapped by the engine's display
+  transform with AgX (`display.toneCurve`, engine 0.193.0), the PNGs its output.
+- **Time-lapse films**: the history was reprojected by the camera alone while the clouds moved with the wind (tens of
+  metres a frame in a film of seconds a frame: streaks). The temporal pass now reads the history where the clouds were
+  (`WeatherGpu.motion`: the wind's drift and the noise's evolution over the frame), and the history fades with the
+  weather time a frame spans (`historySeconds` 4: `blend · exp(−dt / 4 s)`, nothing at 60 Hz).
+- **Cost** ([#8](https://github.com/true-sim/effects-weather/issues/8)): a dynamically indexed local array (the nine
+  type weights) lived in scratch memory; it is indexed by constants now. And settings of the march's kind
+  (`render.clouds.<kind>.*`), each measured against the reference (`CloudFixesTest.theCheaperMarchConvergesToThe
+  ReferenceMarch`, converged still, mean difference over the mean): `interleave` 2 (one pixel of each 2 × 2 block
+  marched a frame in a Bayer order, the rest the history reprojected and clamped to the new pixels around it: 0.81 %),
+  `lightEvery` 2 (the light march every second sample inside a cloud, its optical depth reused between), `lightFar`
+  16 km with `lightStepsFar` 2 (the same cone in fewer, longer steps), `fineRatio` 0.5, `opaque` 0.01 (rays stop at
+  1 % transmittance), `detailFar` 30 km (detail is sub-pixel there): every saving together 2.8 %. Measured one by one
+  (each alone against the reference): light every third sample 2.8 %, two light steps beyond 8 km 2.8 %, fine ratio
+  0.5 0.5 %, 1 % cut-off 0.3 %, no detail beyond 30 km 0.5 %. A flash marches every pixel (it must answer within the
+  frame). The march's push constants are packed (the engine allows 128 bytes). Not done from #8: the voxel cache and
+  empty-space skipping; the interleave of 4 measured no faster than 2 in the storm (2.0 against 1.9 ms: the longest
+  rays bound the dispatch), so the defaults stay at 2.
+
+  `CloudBenchmark` (as above: RX 9070 XT, 1920 x 1080, 2026-11-08, ranges of 3 rounds), clouds' passes in ms; the
+  first round's code, this round's physics with every saving off (the reference), and the defaults:
+
+  | Scene | Tier | First round | Reference | Defaults |
+  |---|---|---|---|---|
+  | fair cumulus, ground | volumetric | 6.35-6.41 | 6.92-6.95 | 2.32-2.34 |
+  | fair cumulus, ground | layered | 3.31-3.36 | 3.62-3.66 | 1.15-1.16 |
+  | overcast, ground | volumetric | 3.28-3.30 | 3.92-3.93 | 1.76-1.78 |
+  | overcast, ground | layered | 2.32-2.34 | 2.99-3.01 | 1.16-1.18 |
+  | thunderstorm, ground | volumetric | 4.92-4.94 | 8.45-8.49 | 2.84-2.85 |
+  | thunderstorm, ground | layered | 2.66-2.67 | 5.65-5.68 | 1.67-1.68 |
+  | flying through | volumetric | 7.51-7.52 | 8.45-8.51 | 2.60-2.62 |
+  | flying through | layered | 5.92-5.94 | 6.79-6.81 | 1.59 |
+  | any | skybox (2D) | 0.04-0.06 | 0.04-0.06 | 0.04-0.06 |
+
+  The storm costs more than the first round's at equal settings: its anvils, wider towers and their billows are cloud
+  the first round did not draw. Layered is within the report's 0.6-1.5 ms in fair weather and overcast and its 2-4 ms
+  in a storm; flying through a layer 1.59 ms. The shadow map and mask 0.13-0.29 ms, the GPU weather maps 0.20 ms.
 
 ## Tiers and quality presets
 

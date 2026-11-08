@@ -59,6 +59,16 @@ public final class Clouds implements Technique {
      * @param flashBlend the history's weight while a flash lights the clouds
      * @param rain whether rain falls below the bases (rain shafts)
      * @param ground whether the ground bounces sunlight into the bases (under the clouds' shadow)
+     * @param historySeconds weather seconds over which the history fades as the clouds evolve: a frame spanning
+     *     {@code dt} weighs it by {@code exp(-dt / historySeconds)} more (0: no fading)
+     * @param interleave the march's interleave s: one pixel of each s x s block marched a frame, the rest from the
+     *     history (temporal amortization: about 1 / s^2 of the march's cost; 1: every pixel every frame)
+     * @param lightStepsFar light steps beyond {@code lightFar} (the same cone in longer steps)
+     * @param lightFar metres from the camera beyond which the light march takes {@code lightStepsFar}
+     * @param lightEvery the light march on every n-th sample inside a cloud, its optical depth reused between
+     * @param fineRatio fine steps (inside clouds) over coarse steps
+     * @param opaque the transmittance at which a ray stops (what lies behind no longer shows)
+     * @param detailFar metres beyond which the detail noise is left out (smaller than a pixel there)
      */
     public record March(
         @Tunable(value = "the cloud march's pixels per scene pixel along each axis (1 full, 2 half, 4 quarter)",
@@ -75,7 +85,20 @@ public final class Clouds implements Technique {
         @Tunable(value = "the history's weight while lightning lights the clouds", min = 0, max = 0.99)
         float flashBlend,
         @Tunable("rain shafts below the cloud bases") boolean rain,
-        @Tunable("sunlight bounced off the ground into the cloud bases") boolean ground) implements TechniqueConfig {
+        @Tunable("sunlight bounced off the ground into the cloud bases") boolean ground,
+        @Tunable(value = "weather seconds over which the clouds' history fades as they evolve (0: never)", min = 0,
+            max = 3600) float historySeconds,
+        @Tunable(value = "the cloud march's interleave: one pixel of each s x s block a frame, the rest reprojected",
+            min = 1, max = 4) int interleave,
+        @Tunable(value = "light steps beyond the light march's far distance", min = 1, max = 16) int lightStepsFar,
+        @Tunable(value = "metres beyond which the light march takes its far steps", min = 0, max = 1_000_000)
+        float lightFar,
+        @Tunable(value = "the light march on every n-th sample inside a cloud, reused between", min = 1, max = 15)
+        int lightEvery,
+        @Tunable(value = "fine steps inside clouds over coarse steps", min = 0.1, max = 1) float fineRatio,
+        @Tunable(value = "the transmittance at which a cloud ray stops", min = 0, max = 0.1) float opaque,
+        @Tunable(value = "metres beyond which the clouds' detail noise is left out", min = 0, max = 1_000_000)
+        float detailFar) implements TechniqueConfig {
     }
 
     /** The 2D tier's tunables. */
@@ -94,13 +117,15 @@ public final class Clouds implements Technique {
 
     /** Fly-through volumes. */
     public static final TechniqueKind<March, Context, Technique> VOLUMETRIC = TechniqueKind.of(SLOT, "volumetric",
-        new March(2, 160, 200_000, 4000, 6, 40, true, true, 0.9f, 0.2f, true, true),
+        new March(2, 160, 200_000, 4000, 6, 40, true, true, 0.9f, 0.2f, true, true, 4, 2, 3, 16_000, 2, 0.4f, 0.005f,
+            50_000),
         "ray-marched volumes from the camera: fly through them",
         (context, config) -> new VolumetricClouds(context, config));
 
     /** Ray-marched layers. */
     public static final TechniqueKind<March, Context, Technique> LAYERED = TechniqueKind.of(SLOT, "layered",
-        new March(2, 96, 200_000, 0, 4, 60, true, true, 0.9f, 0.2f, true, true),
+        new March(2, 96, 200_000, 0, 4, 60, true, true, 0.9f, 0.2f, true, true, 4, 2, 2, 16_000, 2, 0.5f, 0.01f,
+            30_000),
         "ray-marched layers (2.5D), seen from outside",
         (context, config) -> new VolumetricClouds(context, config));
 

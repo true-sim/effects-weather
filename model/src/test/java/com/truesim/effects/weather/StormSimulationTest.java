@@ -130,7 +130,7 @@ class StormSimulationTest {
         assertThat(first).isEqualTo(GOLDEN);
     }
 
-    private static final long GOLDEN = -4426776235528116309L;
+    private static final long GOLDEN = 1103199648541596885L;
 
     @Test
     void matureCellsGrowDaughters() {

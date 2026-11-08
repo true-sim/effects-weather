@@ -5,6 +5,11 @@
 // drift, brushes) shows the seams of a map refreshed tile by tile. The maps are centred on the frame's anchor (snapped
 // to their texels, so texels keep their place on the ground): texel (i, j) holds the plane point
 // anchor + ((i, j) + 0.5 - size / 2) * extent / size. The CPU's maps (WeatherGrid) stay the gameplay's.
+//
+// The coverage channel is the field's (the anvils' discs in it, as gameplay samples them); the renderer reads the
+// cover of everything but the anvils from the second map's alpha and draws the anvils from its blue: each cell's anvil
+// as a plume of ice leaving its core downwind, widening and thinning with the distance (a cumulonimbus incus), not a
+// disc of the core's cloud type.
 import bindless;
 import weather.noise;
 
@@ -69,7 +74,8 @@ struct FieldInputs
 struct FieldPush
 {
     FieldInputs* inputs;
-    uint map;            // storage slots, RGBA16F: coverage, type A, rain, top; type B, its weight
+    uint map;            // storage slots, RGBA16F: coverage, type A, rain, top; type B, its weight, anvil, the
+                         // coverage without the anvils
     uint types;
     uint size;           // texels per edge
     float extent;        // metres the map spans
@@ -175,6 +181,8 @@ void fieldMain(uint3 id : SV_DispatchThreadID)
     }
     float top = f[0].top;
     float preset = coverage;
+    float anvilCover = 0;      // the anvils' plumes (drawn)
+    float withAnvils = coverage; // the field's coverage with the anvils' discs (WeatherField's)
 
     float strongest = 0;
     for (uint s = 0; s < min(f[0].cells, MAX_CELLS); s++)
@@ -186,6 +194,7 @@ void fieldMain(uint3 id : SV_DispatchThreadID)
         if (core > 0)
         {
             coverage = max(coverage, core);
+            withAnvils = max(withAnvils, core);
             precipitation = max(precipitation, w * f[0].cell[s].precipitation);
             // The cell's type takes over as its core outgrows the preset's cover (WeatherField: the strongest wins).
             float take = smoothOf(core / max(preset, 0.05));
@@ -197,22 +206,32 @@ void fieldMain(uint3 id : SV_DispatchThreadID)
                 top = lerp(top, f[0].cell[s].top, take);
             }
         }
-        if (f[0].cell[s].anvil > 0 && w < 0.5)
+        if (f[0].cell[s].anvil > 0)
         {
             float ra = f[0].cell[s].anvilRadius;
-            float da = length(p - f[0].cell[s].anvilCentre);
-            float wa = (1 - smoothOf((da - 0.5 * ra) / (0.5 * ra))) * 0.8 * min(1.0, f[0].cell[s].coverage + 0.5);
-            if (wa > 0)
+            float strength = 0.8 * min(1.0, f[0].cell[s].coverage + 0.5);
+            if (w < 0.5)
             {
-                float take = smoothOf(wa / max(max(coverage, strongest), 0.05) - 0.5);
-                coverage = max(coverage, wa);
-                if (wa > strongest)
-                {
-                    strongest = wa;
-                }
-                mix.add(1.0, take); // cirrus (the anvil's ice): the last type
-                top = lerp(top, f[0].cell[s].top, take);
+                // WeatherField's disc, for the coverage channel gameplay reads.
+                float da = length(p - f[0].cell[s].anvilCentre);
+                withAnvils = max(withAnvils, (1 - smoothOf((da - 0.5 * ra) / (0.5 * ra))) * strength);
             }
+            // The plume drawn: from the core along the wind at the top (towards the anvil's centre), widening from
+            // the core's width to the anvil's, its far end rounded, thinning downwind.
+            float2 axis = f[0].cell[s].anvilCentre - f[0].cell[s].core;
+            float reach = length(axis);
+            axis = reach > 1 ? axis / reach : float2(1, 0);
+            float len = max(2 * reach, 0.6 * ra) + r;
+            float2 q = p - f[0].cell[s].core;
+            float u = dot(q, axis);
+            float v = abs(q.x * axis.y - q.y * axis.x);
+            float t = saturate(u / len);
+            float half = lerp(0.8 * r, max(0.7 * ra, r), sqrt(t));
+            float across = 1 - smoothOf((v - 0.35 * half) / (0.65 * half));
+            float along = (1 - smoothOf((u - 0.55 * len) / (0.45 * len))) * (1 - smoothOf((-u - 0.4 * r) / (0.4 * r)));
+            // Rounded ends: inside an ellipse over the plume's length.
+            float wa = across * along * strength * (1 - 0.45 * t);
+            anvilCover = max(anvilCover, wa);
         }
     }
 
@@ -227,17 +246,21 @@ void fieldMain(uint3 id : SV_DispatchThreadID)
         if (mode == 2)
         {
             coverage *= 1 - w;
+            withAnvils *= 1 - w;
+            anvilCover *= 1 - w;
             precipitation *= 1 - w;
             continue;
         }
         if (mode == 0)
         {
             coverage = min(1.0, coverage + w * f[0].brush[b].coverage);
+            withAnvils = min(1.0, withAnvils + w * f[0].brush[b].coverage);
             precipitation = min(1.0, precipitation + w * f[0].brush[b].precipitation);
         }
         else
         {
             coverage += (f[0].brush[b].coverage - coverage) * w;
+            withAnvils += (f[0].brush[b].coverage - withAnvils) * w;
             precipitation += (f[0].brush[b].precipitation - precipitation) * w;
         }
         mix.add(f[0].brush[b].type, smoothOf(2 * w - 0.5));
@@ -246,6 +269,6 @@ void fieldMain(uint3 id : SV_DispatchThreadID)
             top = lerp(top, f[0].brush[b].top, smoothOf(2 * w - 0.5));
         }
     }
-    images[push.map][id.xy] = float4(coverage, mix.a, min(precipitation, coverage), top);
-    images[push.types][id.xy] = float4(mix.b, mix.wb, 0, 0);
+    images[push.map][id.xy] = float4(withAnvils, mix.a, min(precipitation, coverage), top);
+    images[push.types][id.xy] = float4(mix.b, mix.wb, anvilCover, coverage);
 }

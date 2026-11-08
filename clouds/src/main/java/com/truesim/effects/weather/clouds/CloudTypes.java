@@ -40,7 +40,7 @@ public final class CloudTypes {
         p[CloudType.STRATOCUMULUS.ordinal()] = p(500, 2000, 0.1, 0.4, -0.2, 0, 0.5, 0.05, 0.4, 300, 0.3, 18, false);
         p[CloudType.CUMULUS.ordinal()] = p(800, 2500, 0.05, 0.7, 0.3, 0, 0.5, 0.1, 0.5, 200, 0.5, 20, false);
         p[CloudType.TOWERING_CUMULUS.ordinal()] = p(800, 6000, 0.03, 0.5, 0.2, 0, 0.5, 0.15, 0.6, 250, 1.0, 24, false);
-        p[CloudType.CUMULONIMBUS.ordinal()] = p(800, 12000, 0.03, 0.15, 0.0, 1.5, 0.75, 0.3, 0.5, 400, 1.5, 30, false);
+        p[CloudType.CUMULONIMBUS.ordinal()] = p(800, 12000, 0.03, 0.15, 0.0, 0.6, 0.75, 0.3, 0.5, 400, 1.5, 30, false);
         p[CloudType.ALTOCUMULUS.ordinal()] = p(2500, 4500, 0.2, 0.4, 0.0, 0, 0.5, 0.05, 0.7, 150, 0.2, 16, false);
         p[CloudType.ALTOSTRATUS.ordinal()] = p(2000, 6000, 0.3, 0.3, 0.0, 0, 0.5, 0, 0.3, 600, 0.1, 20, false);
         p[CloudType.NIMBOSTRATUS.ordinal()] = p(500, 4000, 0.1, 0.3, -0.4, 0, 0.5, 0, 0.2, 500, 0.4, 24, false);

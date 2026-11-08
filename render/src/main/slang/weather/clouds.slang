@@ -137,7 +137,18 @@ public struct CloudFrame
     public float3 shadowU;          // its axes: across, up the map, towards the light
     public float rainExtinctionScale; // multiplies the Marshall-Palmer extinction (1 physical)
     public float3 shadowV;
-    public uint pad0;
+    public float anvilTop;          // metres: where the storms' anvils spread (the tropopause: their tops)
+    public float anvilThickness;    // metres: an anvil's depth at full cover
+    public float anvilExtinction;   // 1/m at density 1 (the ice's physical extinction over the anvil's mean density)
+    public float anvilColumn;       // 1/m: the ice's physical extinction, the anvil's mean where it covers
+    public float anvilOvershoot;    // metres: the overshooting dome over an updraft core, above the anvil
+    public float anvilDiameter;     // micrometres: the ice crystals' effective diameter
+    public float rainSlant;         // metres downwind per metre fallen (the wind's shear over the drops' fall speed)
+    public float rainCurve;         // more slant per fallen fraction of the base's height (shear growing downwards)
+    public float rainEvaporation;   // the fraction of the rain evaporated by the time it reaches the ground
+    public float rainTaper;         // how much of the rain's edge evaporates before the ground (the shaft narrows)
+    public float billowScale;       // the towers' turrets: times the base shape's frequency (0: none)
+    public uint rainAny;            // 1: some rain can fall this frame
     public CloudType types[CLOUD_TYPES];
     public Flash flashes[MAX_FLASHES];
 };
@@ -174,6 +185,7 @@ public struct Weather
     public uint a;
     public uint b;
     public float wb;
+    public float anvil;         // the storms' anvils' cover (drawn on their own, over the types)
 };
 
 /** The type of a weather map's type channel (CloudType.fromChannel). */
@@ -182,22 +194,32 @@ public uint typeOf(float channel)
     return uint(round(saturate(channel) * float(CLOUD_TYPES - 1)));
 }
 
-/** Adds a map's four texels around texture coordinates `uv` (clamped), weighted by `weight`, into the sums. */
+/**
+ * Adds a map's four texels around texture coordinates `uv` (clamped), weighted by `weight`, into the sums. The type
+ * weights are indexed by constants only (unrolled): a dynamically indexed local array lives in scratch memory, which
+ * made every density evaluation several times slower.
+ */
 void gather(uint map, uint types, uint size, float2 uv, float weight, inout float4 sums, inout float typeWeights[9])
 {
     float2 at = uv * float(size) - 0.5;
     int2 base = int2(floor(at));
     float2 fraction = at - float2(base);
+    [ForceUnroll]
     for (uint k = 0; k < 4; k++)
     {
         int2 offset = int2(k & 1, k >> 1);
         int2 texel = clamp(base + offset, int2(0, 0), int2(size - 1, size - 1));
         float w = weight * (offset.x == 1 ? fraction.x : 1 - fraction.x) * (offset.y == 1 ? fraction.y : 1 - fraction.y);
         float4 v = textures[map].Load(int3(texel, 0));
-        float2 t = textures[types].Load(int3(texel, 0)).rg;
-        sums += w * float4(v.r, v.b, v.a, 0);
-        typeWeights[typeOf(v.g)] += w * (1 - t.y);
-        typeWeights[typeOf(t.x)] += w * t.y;
+        float4 t = textures[types].Load(int3(texel, 0));
+        sums += w * float4(t.a, v.b, v.a, t.b); // the coverage without the anvils, rain, top, the anvils
+        uint ta = typeOf(v.g);
+        uint tb = typeOf(t.x);
+        [ForceUnroll]
+        for (uint c = 0; c < CLOUD_TYPES; c++)
+        {
+            typeWeights[c] += (ta == c ? w * (1 - t.y) : 0) + (tb == c ? w * t.y : 0);
+        }
     }
 }
 
@@ -233,11 +255,13 @@ public Weather weatherAt(CloudFrame* f, float2 plane)
     w.coverage = saturate(sums.x + f[0].coverageOffset);
     w.rain = sums.y;
     w.top = sums.z;
+    w.anvil = sums.w;
     // The two heaviest types.
     uint a = 0;
     uint b = 0;
     float wa = -1;
     float wbest = -1;
+    [ForceUnroll]
     for (uint t = 0; t < CLOUD_TYPES; t++)
     {
         float v = typeWeights[t];
@@ -298,11 +322,49 @@ float2 layerOf(CloudFrame* f, uint t, float top)
     return float2(base, top > base + 100 ? top : f[0].types[t].top);
 }
 
+/** The convective types (towering cumulus, cumulonimbus): towers of billows. */
+static const uint TOWERING = 3;
+static const uint CUMULONIMBUS_TYPE = 4;
+
+/**
+ * The maps' channels at plane point `plane`, bilinear (the hardware's filter, clamped like gather's texels): the
+ * coverage without the anvils, the rain, the top, the anvils' cover. Cheaper than weatherAt (no types): for the shear's
+ * look-up upwind and the rain falling from upwind.
+ */
+public float4 channelsAt(CloudFrame* f, float2 plane)
+{
+    float near = within(plane, f[0].nearBounds, 0.1 * f[0].nearExtent);
+    float far = (1 - near) * step(0.0, min(min(plane.x - f[0].farBounds.x, plane.y - f[0].farBounds.y),
+        min(f[0].farBounds.z - plane.x, f[0].farBounds.w - plane.y)));
+    float4 sum = 0;
+    if (near > 0)
+    {
+        float2 uv = f[0].nearAnchor + plane / f[0].nearExtent;
+        float4 m = textures[f[0].nearMap].SampleLevel(samplers[LINEAR_CLAMP], uv, 0);
+        float4 t = textures[f[0].nearTypes].SampleLevel(samplers[LINEAR_CLAMP], uv, 0);
+        sum += near * float4(t.a, m.b, m.a, t.b);
+    }
+    if (far > 0)
+    {
+        float2 uv = f[0].farAnchor + plane / f[0].farExtent;
+        float4 m = textures[f[0].farMap].SampleLevel(samplers[LINEAR_CLAMP], uv, 0);
+        float4 t = textures[f[0].farTypes].SampleLevel(samplers[LINEAR_CLAMP], uv, 0);
+        sum += far * float4(t.a, m.b, m.a, t.b);
+    }
+    sum.x = saturate(sum.x + f[0].coverageOffset);
+    return sum;
+}
+
 /**
  * The clouds and rain at a point `rel` from the anchor (altitude `altitude` above the ground): Schneider's density per
  * type of the place's mix (the base shape remapped by the coverage widened by the anvil, eroded by the detail noise
- * where `detail`, distorted by curl), times the type's physical extinction, blended by the types' weights. The noise
- * is sampled once for both types. `shapeVolume` NO_NOISE: the cheap tiers' density of the coverage and profile alone.
+ * where `detail`, distorted by curl), times the type's physical extinction, blended by the types' weights; the storms'
+ * anvils (ice, their own extinction and phase) over them; the rain below the bases. The noise is sampled once for all
+ * types. `shapeVolume` NO_NOISE: the cheap tiers' density of the coverage and profile alone.
+ *
+ * Towering cumulus and cumulonimbus are towers of billows: their shape also reads the base shape at `billowScale`
+ * times its frequency (rounded turrets a few hundred metres to a kilometre across), their coverage narrows towards the
+ * top (rounded crowns), and their base stays flat (the profile's short base ramp).
  */
 public CloudPoint cloudAt(CloudFrame* f, float3 rel, float altitude, bool detail, uint shapeVolume,
     uint detailVolume, uint curl)
@@ -325,7 +387,7 @@ public CloudPoint cloudAt(CloudFrame* f, float3 rel, float altitude, bool detail
     }
     float2 plane = rel.xz;
     Weather w = weatherAt(f, plane);
-    if (w.coverage <= 1.0e-3)
+    if (w.coverage <= 1.0e-3 && w.anvil <= 1.0e-3)
     {
         return c;
     }
@@ -340,34 +402,61 @@ public CloudPoint cloudAt(CloudFrame* f, float3 rel, float altitude, bool detail
     float h = (altitude - mixed.x) / c.thickness;
     c.height = saturate(h);
     c.top = mixed.y;
-    c.ice = lerp(f[0].types[w.a].ice, f[0].types[w.b].ice, w.wb);
+    float iceWeight = lerp(f[0].types[w.a].ice, f[0].types[w.b].ice, w.wb);
     c.absorption = lerp(f[0].types[w.a].absorption, f[0].types[w.b].absorption, w.wb);
-    // Below the base: the rain falling from them, to the ground (Marshall-Palmer).
+    float convective = (w.a == TOWERING || w.a == CUMULONIMBUS_TYPE ? weights[0] : 0)
+        + (w.b == TOWERING || w.b == CUMULONIMBUS_TYPE ? weights[1] : 0);
+    // Below the base: the rain falling from them, to the ground (Marshall-Palmer). Drops fall at a few metres a
+    // second through the wind's shear: the rain here left the base upwind (the shaft slants and curves downwind), it
+    // evaporates on the way down in the drier air below (the shaft thins and narrows towards the ground), and falls in
+    // curtains (the base shape at the base's height, carried with the rain).
     if (altitude < mixed.x)
     {
-        c.rainRate = w.rain * f[0].rainMaxRate;
-        c.rain = rainExtinction(c.rainRate) * f[0].rainExtinctionScale;
+        if (f[0].rainAny != 0)
+        {
+            float below = mixed.x - altitude;
+            float drift = below * (f[0].rainSlant + f[0].rainCurve * below / max(mixed.x, 1));
+            float2 from = plane - f[0].wind * drift;
+            float rain = f[0].rainSlant > 0 ? channelsAt(f, from).y : w.rain;
+            float fallen = saturate(below / max(mixed.x, 1));
+            // Narrower towards the ground: the edges (light rain) evaporate first.
+            float taper = f[0].rainTaper * fallen;
+            rain = saturate((rain - taper) / max(1 - taper, 0.05)) * (1 - f[0].rainEvaporation * fallen);
+            if (rain > 0 && shapeVolume != NO_NOISE)
+            {
+                float3 sp = f[0].shapeAnchor + float3(from.x, mixed.x, from.y) / (0.5 * f[0].shapePeriod);
+                float curtains = volumes[shapeVolume].SampleLevel(samplers[LINEAR_REPEAT], sp, 0).r;
+                rain *= saturate(0.3 + 1.4 * curtains);
+            }
+            c.rainRate = rain * f[0].rainMaxRate;
+            c.rain = rainExtinction(c.rainRate) * f[0].rainExtinctionScale;
+        }
+        // An anvil overhead does not reach below the base of the cloud under it.
         return c;
     }
     float shear = weights[0] * f[0].types[w.a].shear + weights[1] * f[0].types[w.b].shear;
     float coverage = w.coverage;
-    if (shear != 0 && h > 0)
+    if (shear != 0 && h > 0 && h <= 1)
     {
         // The upper part leans downwind: the cover that is here came from upwind.
-        coverage = weatherAt(f, plane - f[0].wind * (shear * saturate(h) * c.thickness)).coverage;
-        if (coverage <= 1.0e-3)
-        {
-            return c;
-        }
+        coverage = channelsAt(f, plane - f[0].wind * (shear * saturate(h) * c.thickness)).x;
     }
     float shapeN = 1;
     float high = 0;
+    float billow = 1;
     if (shapeVolume != NO_NOISE)
     {
         float3 sp = f[0].shapeAnchor + float3(rel.x, altitude, rel.z) / f[0].shapePeriod;
         float4 shape = volumes[shapeVolume].SampleLevel(samplers[LINEAR_REPEAT], sp, 0);
         float low = dot(shape.gba, float3(0.625, 0.25, 0.125));
         shapeN = saturate(remap(remap(shape.r, low - 1, 1, 0, 1), SHAPE_LOW, SHAPE_HIGH, 0, 1));
+        if (convective > 0 && f[0].billowScale > 0)
+        {
+            // Turrets: the shape's Worley billows at a finer scale, stretched upwards a little (towers rise).
+            float3 bp = sp * float3(f[0].billowScale, 0.7 * f[0].billowScale, f[0].billowScale) + 0.37;
+            float4 b = volumes[shapeVolume].SampleLevel(samplers[LINEAR_REPEAT], bp, 0);
+            billow = saturate(remap(dot(b.gba, float3(0.625, 0.25, 0.125)), 0.25, 0.85, 0, 1));
+        }
         if (detail)
         {
             float2 cp = f[0].curlAnchor + plane / f[0].curlPeriod;
@@ -381,9 +470,12 @@ public CloudPoint cloudAt(CloudFrame* f, float3 rel, float altitude, bool detail
     }
     float droplets = 0;
     float extinctionSum = 0;
+    float iceExtinction = 0;
+    float waterSum = 0;
+    [ForceUnroll]
     for (uint k = 0; k < 2; k++)
     {
-        if (weights[k] <= 0)
+        if (weights[k] <= 0 || coverage <= 1.0e-3)
         {
             continue;
         }
@@ -397,26 +489,78 @@ public CloudPoint cloudAt(CloudFrame* f, float3 rel, float altitude, bool detail
         }
         float2 profile = profileAt(f, t, ht);
         float sigma = f[0].types[t].extinction * f[0].densityScale;
-        c.columnSigma += weights[k] * w.coverage * f[0].types[t].column * f[0].densityScale;
+        c.columnSigma += weights[k] * coverage * f[0].types[t].column * f[0].densityScale;
         if (profile.x <= 0)
         {
             continue;
         }
+        bool tower = t == TOWERING || t == CUMULONIMBUS_TYPE;
         // Each type covers its weight's share of the coverage: a type leaving breaks up and shrinks, as cloud fields
         // do, instead of thinning into a veil (a thick layer at a small weight would still be opaque).
-        float cover = pow(coverage * weights[k], 1.0 / (1.0 + profile.y)); // the anvil widens the coverage at the top
+        float share = coverage * weights[k];
+        if (tower)
+        {
+            // A tower fills its core's disc (its cover rises steeply inside it), and narrows over its top fifth
+            // into a rounded crown.
+            share = sqrt(share) * (1 - 0.45 * smoothstep(0.75, 1.0, ht));
+        }
+        float cover = pow(share, 1.0 / (1.0 + profile.y)); // the anvil widens the coverage at the top
+        // Turrets carve the tower's flanks, where its cover falls off; its core stays solid.
+        float shaped = tower && shapeVolume != NO_NOISE ? shapeN * lerp(1.0, lerp(0.35, 1.0, billow),
+            saturate(1.5 * (1 - cover))) : shapeN;
         float cloud = shapeVolume == NO_NOISE ? cover * profile.x
-            : saturate(remap(shapeN * profile.x, 1 - COVER_REACH * cover, 1, 0, 1)) * cover;
+            : saturate(remap(shaped * profile.x, 1 - COVER_REACH * cover, 1, 0, 1)) * cover;
         if (detail && cloud > 0)
         {
             cloud = saturate(remap(cloud, high * f[0].types[t].erosion * 0.4 * f[0].detailStrength, 1, 0, 1));
         }
         float e = cloud * sigma;
         c.extinction += e;
-        droplets += e * f[0].types[t].droplet;
+        droplets += e * (1 - f[0].types[t].ice) * f[0].types[t].droplet;
+        waterSum += e * (1 - f[0].types[t].ice);
         extinctionSum += e;
+        iceExtinction += e * f[0].types[t].ice;
     }
-    c.droplet = extinctionSum > 0 ? droplets / extinctionSum : f[0].types[w.a].droplet;
+    // The anvil: ice spreading under the tropopause from a storm's top (a cumulonimbus incus), its cover the field's
+    // plume, thickest near the core; over the updraft core an overshooting dome rises above it. Optical depths of
+    // tens (ice water content of tenths of a gram per cubic metre, crystals of tens of micrometres), not a cirrus veil.
+    if (w.anvil > 1.0e-3 && f[0].anvilThickness > 0)
+    {
+        // Thick near the core where it covers fully, a thin sheet towards its edges (a few hundred metres).
+        float thick = f[0].anvilThickness * (0.12 + 0.88 * pow(saturate(w.anvil / 0.8), 1.5));
+        float cb = (w.a == CUMULONIMBUS_TYPE ? weights[0] : 0) + (w.b == CUMULONIMBUS_TYPE ? weights[1] : 0);
+        float core = cb * smoothstep(0.75, 1.0, w.coverage);
+        float base = f[0].anvilTop - thick;
+        float top = f[0].anvilTop + f[0].anvilOvershoot * core * core;
+        if (altitude > base && altitude < top)
+        {
+            float ha = (altitude - base) / (top - base);
+            // A ragged, sagging base (mammatus-like lobes from the shape), a flat top cut off sharply.
+            float profile = smoothstep(0.0, 0.35, ha) * (1 - smoothstep(0.82, 1.0, ha));
+            // A continuous sheet where it covers, its edges and base broken by the shape (not puffs: ice spreads).
+            float cover = w.anvil;
+            float cloud = shapeVolume == NO_NOISE ? cover * profile
+                : saturate(remap(profile * saturate(cover / 0.6), 0.6 * (1 - shapeN), 1, 0, 1));
+            if (detail && cloud > 0)
+            {
+                cloud = saturate(remap(cloud, high * 0.6 * 0.4 * f[0].detailStrength, 1, 0, 1));
+            }
+            float e = cloud * f[0].anvilExtinction * f[0].densityScale;
+            c.extinction += e;
+            extinctionSum += e;
+            iceExtinction += e;
+            c.columnSigma = max(c.columnSigma, cover * f[0].anvilColumn * f[0].densityScale);
+            if (e > 0 && (altitude > mixed.y || h > 1))
+            {
+                // Above the other layers: the lighting's layer is the anvil's.
+                c.height = ha;
+                c.thickness = top - base;
+                c.top = top;
+            }
+        }
+    }
+    c.ice = extinctionSum > 0 ? iceExtinction / extinctionSum : iceWeight;
+    c.droplet = waterSum > 0 ? droplets / waterSum : f[0].types[w.a].droplet;
     return c;
 }
 
@@ -450,10 +594,15 @@ public float approximateMie(float cosTheta, float d, float scale)
     return (1 - wD) * henyeyGreenstein(cosTheta, gHg * scale) + wD * draine(cosTheta, gD * scale, alpha);
 }
 
-/** The phase of a cloud point (ice: HG with g 0.75; water: the approximate Mie of its droplets). */
+/**
+ * The phase of a cloud point: its ice's (HG with g 0.75, Baum et al. 2005's ice crystals) and its droplets' (the
+ * approximate Mie) by their shares of its extinction.
+ */
 public float pointPhase(CloudPoint c, float cosTheta, float scale)
 {
-    return c.ice > 0.5 ? henyeyGreenstein(cosTheta, 0.75 * scale) : approximateMie(cosTheta, c.droplet, scale);
+    float ice = c.ice > 0 ? henyeyGreenstein(cosTheta, 0.75 * scale) : 0;
+    float water = c.ice < 1 ? approximateMie(cosTheta, c.droplet, scale) : 0;
+    return lerp(water, ice, saturate(c.ice));
 }
 
 /** The phase of type `t` (ice: HG with g 0.75; water: the approximate Mie). */
@@ -545,7 +694,8 @@ public float cloudShadow(CloudFrame* f, uint map, float3 rel)
             return 1;
         }
         float2 q = rel.xz + L.xz * ((2000 - rel.y) / L.y);
-        return 1 - weatherAt(f, q).coverage;
+        float4 w = channelsAt(f, q);
+        return 1 - max(w.x, w.w);
     }
     float3 v = textures[map].SampleLevel(samplers[LINEAR_CLAMP], s.xy, 0).rgb;
     return exp(-min(v.b, v.g * max(0, s.z - v.r)));
