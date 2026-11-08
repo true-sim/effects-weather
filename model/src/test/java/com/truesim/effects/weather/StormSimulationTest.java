@@ -69,6 +69,53 @@ class StormSimulationTest {
         assertThat(kinds[FlashType.INTRACLOUD.ordinal()]).isGreaterThan(kinds[FlashType.NEGATIVE_GROUND.ordinal()]);
     }
 
+    /**
+     * Every value a cell shows is continuous in its age: a step of a second changes its cover, rain, flash rate and anvil
+     * by at most a few hundredths and its top by tens of metres, at birth, at every stage boundary and at its end
+     * (which leaves nothing). Before, its cover started at 0.6, its rain jumped from a half to all of it and its flash
+     * rate from three tenths to all of it as it matured, and its anvil stayed whole until it vanished with the cell.
+     */
+    @Test
+    void everyValueOfACellIsContinuousInItsAge() {
+        for (long seed = 1; seed <= 5; seed++) {
+            StormSimulation storms = new StormSimulation(StormConfig.defaults().withDaughterRate(0),
+                LightningConfig.defaults(), new LightningEvents(4096), WeatherDomain.flat(), seed);
+            int s = storms.spawn(0, 0, 0);
+            double[] last = {0, 0, 0, 0, storms.top(s)};
+            double flashes = 0;
+            for (int t = 0; storms.active(s); t++) {
+                double[] now = {storms.coverage(s), storms.precipitation(s), storms.flashRate(s), storms.anvil(s),
+                    storms.top(s)};
+                flashes = Math.max(flashes, now[2]);
+                assertThat(Math.abs(now[0] - last[0])).as("cover at %d s", t).isLessThan(0.02);
+                assertThat(Math.abs(now[1] - last[1])).as("rain at %d s", t).isLessThan(0.02);
+                assertThat(Math.abs(now[2] - last[2])).as("flash rate at %d s", t).isLessThan(0.1);
+                assertThat(Math.abs(now[3] - last[3])).as("anvil at %d s", t).isLessThan(0.02);
+                assertThat(Math.abs(now[4] - last[4])).as("top at %d s", t).isLessThan(40);
+                last = now;
+                storms.step(t, 1, 0, WindProfile.calm(), 1, 0, 0, 0);
+            }
+            assertThat(flashes).isPositive();
+            assertThat(last[0]).as("nothing left of its cover when it ends").isLessThan(0.02);
+            assertThat(last[1]).as("nor of its rain").isLessThan(0.02);
+            assertThat(last[3]).as("nor of its anvil").isLessThan(0.02);
+        }
+    }
+
+    /** A cell's top at any age, as it will be (for renderers drawing towers of its stages). */
+    @Test
+    void theTopAtAnAgeIsTheTopAtThatAge() {
+        StormSimulation storms = simulation(4, new LightningEvents(256));
+        int s = storms.spawn(0, 0, 0);
+        double[] tops = new double[6000];
+        for (int t = 0; t < tops.length && storms.active(s); t++) {
+            tops[t] = storms.top(s);
+            assertThat(storms.topAt(s, storms.age(s))).isEqualTo(tops[t]);
+            storms.step(t, 1, 0, WindProfile.calm(), 1, 0, 0, 0);
+        }
+        assertThat(storms.topAt(s, -10)).isEqualTo(storms.baseAltitude());
+    }
+
     @Test
     void cellsDriftWithTheSteeringWindAndAnvilsLeadDownwind() {
         StormSimulation storms = simulation(2, new LightningEvents(64));
@@ -130,7 +177,8 @@ class StormSimulationTest {
         assertThat(first).isEqualTo(GOLDEN);
     }
 
-    private static final long GOLDEN = 1103199648541596885L;
+    // Changed with the continuous life cycle (rain, flashes, cover and anvil without steps; daughters on the flank).
+    private static final long GOLDEN = -3028369275414425372L;
 
     @Test
     void matureCellsGrowDaughters() {

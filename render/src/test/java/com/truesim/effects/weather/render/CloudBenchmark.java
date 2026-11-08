@@ -37,9 +37,15 @@ class CloudBenchmark {
         double[][][] shadows = new double[scenes.length][tiers.length][rounds];
         double[][][] frame = new double[scenes.length][tiers.length][rounds];
         double[][][][] passes = new double[scenes.length][tiers.length][PASSES.length][rounds];
+        // TRUESIM_BENCH_ONLY: measure only the scenes and tiers whose names contain one of these words (others 0).
+        String only = System.getenv().getOrDefault("TRUESIM_BENCH_ONLY", "");
         for (int round = 0; round < rounds; round++) {
             for (int i = 0; i < scenes.length; i++) {
                 for (int t = 0; t < tiers.length; t++) {
+                    if (!only.isBlank() && !(scenes[i].name() + " " + tiers[t]).contains(only.split(" ")[0])
+                        || only.split(" ").length > 1 && !tiers[t].equals(only.split(" ")[1])) {
+                        continue;
+                    }
                     double[] r = measure(scenes[i], tiers[t]);
                     march[i][t][round] = r[0];
                     shadows[i][t][round] = r[1];

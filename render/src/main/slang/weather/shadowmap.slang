@@ -44,7 +44,7 @@ void shadowMapMain(uint3 id : SV_DispatchThreadID)
     {
         float s = sTop + (float(i) + 0.5) * step;
         float3 p = plane - L * s;
-        CloudPoint c = cloudAt(f, float3(p.x, 0, p.z), p.y, false, push.shape, push.shape, push.shape);
+        CloudPoint c = cloudAt(f, float3(p.x, 0, p.z), p.y, 0, push.shape, push.shape, push.shape);
         if (c.extinction > 0)
         {
             if (front < 0)

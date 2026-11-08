@@ -276,7 +276,8 @@ Six fixes, each measured (tests that fail on the first round's code: run on its 
   (`CloudShots.groundRealTime`, a mature storm and fair cumulus, 30 frames a second) the ground changes 0.0018 a
   frame (of 1, sRGB) everywhere, the display transform's dither, with no block pops, on the first round's code and
   this one alike: no noise or flicker of the shadow mask or the light.
-- **Not done, or still wrong**: the voxel cache and empty-space skipping (#8); the interleave of 4 brings little;
+- **Not done, or still wrong** (the third round, below, did the anvils, the towers, the dotted row, the 2D tier's
+  anvils and empty-space skipping): the voxel cache and empty-space skipping (#8); the interleave of 4 brings little;
   a thin dotted row of pixels right at the horizon from the
   half-resolution march straddling it; the anvil spreads over 20 minutes, so a 30-minute film ends with it half grown,
   and a cell's tower (a 2.7 km core radius) looks slender from 25 km; low-sun daytime clouds look flatter than the
@@ -315,6 +316,143 @@ Six fixes, each measured (tests that fail on the first round's code: run on its 
   The storm costs more than the first round's at equal settings: its anvils, wider towers and their billows are cloud
   the first round did not draw. The defaults' column is the final code's (its anvils thinner and towers solid since
   the reference's run). Layered is within the report's 0.6-1.5 ms in every scene, flying through a layer 1.46 ms. The shadow map and mask 0.13-0.29 ms, the GPU weather maps 0.20 ms.
+
+### weather-render, third round (branch `cumulonimbus`): storm cells as convective clouds
+
+The second round's cumulonimbus was the cumulonimbus type's profile over the weather map's core disc: a column of the
+core's coverage under the type's top with an anvil slab on it; from 25 km a slender white column with a round blob (a
+keyhole), and its top popped in as the cell matured. This round draws a storm cell as a modelled convective cloud from
+its state in the simulation, continuous in time; and fixes what the second round left.
+
+References: the WMO International Cloud Atlas (2017: cumulus humilis, mediocris, congestus; cumulonimbus calvus and
+capillatus; incus, mamma, praecipitatio, virga), Houze 2014 (*Cloud Dynamics*, 2nd ed., ch. 8: ordinary and multicell
+thunderstorms, the anvil spreading under the tropopause, overshooting tops), Byers and Braham 1949 (the life cycle),
+Browning et al. 1976 (multicell storms: new cells on the right flank, the flanking line), Doswell's *Advanced
+Spotters' Field Guide* (NOAA/NWS: flat base, flanking line, rain shafts, backsheared anvil, mammatus); Ebert 1997 and
+Webanck et al. 2018 (implicit, procedural cloud shapes), Schneider 2022 (*Nubis³*, SIGGRAPH Advances: an envelope's
+distance turned into density and eroded by billows), Quilez (the ellipsoid's distance bound, the polynomial smooth
+minimum), Hillaire 2020 and Unreal Engine's cloud shadows on the atmosphere.
+
+- **The cell's anatomy** (`StormTowers`, from `StormSimulation`'s cell at its age; every value a continuous function
+  of the age): the main updraft's tower over the core, 0.3 of the core's radius while it is a cumulus and 1.25 of it
+  once it towers (a mature body 5 to 15 km across, as wide as it is tall), its top widening into the anvil as that
+  spreads; the flanking line, three towers stepping down and away on the right flank of the motion, each starting later
+  and staying lower, still growing while the main tower is mature; two early cumuli the main tower absorbs; one flat
+  base. Its top glaciates once it passes `render.clouds.storm.glaciation` (8 km, about -35 C; at most 1.5 km below the
+  cell's top): the turrets flatten and the edge softens over the next 1.5 km of growth (calvus), the ice turns fibrous
+  as the anvil spreads (capillatus). The tropopause (the cell's maximum top) flattens every top (a smooth maximum over
+  300 m) but the overshooting top's: a dome of 0.4 the tower's radius rising `render.clouds.anvil.overshoot` (1.2 km)
+  above it early in the mature stage and sinking back. As the cell dissipates its liquid towers erode away into
+  fragments, the ice later; far from the focus, where the simulation drops cells, they fade out first.
+- **Density** (clouds.slang's storm part of `cloudAt`): each tower's envelope as a signed distance (a column on the
+  base, narrower at the base, leaning downwind with the shear (`render.clouds.storm.lean`), under a dome as high as the
+  tower allows: a young cumulus a lens flatter than wide, a towering one round-topped; Quilez's ellipsoid bound, held to
+  the bounding cylinder's distance), the towers smoothly united over a third of their size, and every value the density
+  reads (turret size, top, tropopause, the cell's water, ice and fibres) blended as the union blends them; carved by
+  turrets, the shape volume's Worley octaves in the cell's own frame (moving with it, rising with its updraft at
+  `render.clouds.storm.rise`, tiles of `render.clouds.storm.turretPeriod`, bulging `render.clouds.storm.turrets` times a
+  fifth of the tower's size, creases shallow), largest on the domes; turned into density over an edge thin where the
+  surface faces up (50 m: crisp sunlit cauliflower), wider on the flanks (220 m), soft on ice (450 m); the detail noise
+  erodes the edge. Liquid towers at the cumulonimbus type's extinction (1.5 g/m³ of 30 µm droplets: 150 per km),
+  glaciated tops at `render.clouds.storm.ice` (0.6 g/m³ of the anvil's crystals). A third weather map holds per texel
+  the cells whose towers may stand there (three indices) and the anvils' top, so a sample visits at most three cells.
+- **Anvils** (the types map's blue, the cells map's top): each cell's plume spreads out of its tower's top from nothing
+  (its width and length grow from zero over its first quarter, its depth with its cover), then downwind along the
+  wind at the top, a little upwind too, to `render.clouds.anvil.width` (1.2) times its radius wide and
+  `render.clouds.anvil.length` (3.5) radii long, sharp-edged, thinning downwind (`render.clouds.anvil.thickness` 2 km
+  near the core to a few hundred metres); under its cell's own top (filtered, defined around the plume too so its edges
+  blend with their own top); a flat top, a smooth underside sloping up as the sheet thins, fibrous along the shear,
+  pouches hanging from its older part once the anvils have spread (`render.clouds.anvil.mammatus`, 500 m), and
+  precipitation from its base evaporating within `render.rain.virgaDepth` (virga, `render.rain.virga` 0.3 mm/h).
+- **Lighting**: a tower's shaded flank is lit by the sky beside it: the sky's light comes in from the nearest side (the
+  optical depth to it from the distance field) as much as that side sees of the sky ((1 + n·up) / 2: a flat base sees
+  the ground). The ground's light into a cloud's base is the sun's through the clouds towards it from the ground point
+  (in a tower's shadow the ground is dark, not only under the column overhead) and the sky's through the column; the
+  rain's diffused light likewise (the two-stream transmittance less the direct beam's, which the rain's phase function
+  scatters) plus the fifth of the sky's light below 12 degrees no cloud overhead hides. Beyond the Beer shadow map the
+  storms' towers and anvils shade by their analytic optical depths (columns of their radius; the rest of the anvil's
+  sheet along the ray), and the column over a point is the storms' too: before, beyond the map's 16 km every cloud base
+  and rain shaft was lit as under a clear sky (white rain, white bases). The map now follows the focus (the camera),
+  snapped in world space, and hands over to the far estimates across its outer tenth (it followed the anchor, which
+  jumps a tile at a time: the clouds near its edge changed between its shadows and the far estimates from one frame to
+  the next). The air in front of the clouds scatters only the sunlight that reaches it: its aerial perspective times
+  the clouds' transmittance towards the sun at eight points along the ray, weighted by the air's density (the cloud
+  shadows on the atmosphere of Unreal Engine's sky, all of whose in-scattering comes from the sun). The cone march
+  stops at an optical depth of 48 (the octaves' last leaves e^-12 of the sun) and takes the column's long step; in a
+  tower it takes the cone's length in two steps.
+- **Continuity in time**: the simulation's cover, rain, flash rate and anvil have no steps (before: cover 0.6 at birth,
+  rain from a half and flashes from three tenths to all at maturity, the anvil whole until the cell vanished); every
+  tower, the glaciation, the overshoot, the anvil and the reach are functions of the age; the march's level of detail
+  fades over `render.clouds.lodBand` of its distances (the detail noise fades out before `detailFar`, the light
+  march's far steps start at a distance dithered around `lightFar`, the temporal accumulation averaging both); the Beer
+  shadow map blends into the far estimates. The top's pop in v0.4.0 was the anvil: as the cell matured its plume
+  appeared at once at the core's width and full strength, the anvils' altitude and the march's top one value jumping
+  from 0 to the cell's top; and at the cell's end the anvil vanished with it (`StormContinuityTest`).
+- **2D tier**: towers as solids (columns under domes, intersected analytically), lit as a thick cloud's surface by the
+  sun on the side facing it, the sky above and the ground below; anvils as a slab at their middle; composited with the
+  type layer nearest first.
+- **The horizon's dotted row**: with the march interleaved, a pixel not marched this frame took its spatial estimate
+  from the marched pixels around it, sky and ground alike, and kept that for many frames (the history clamp spanned
+  both): where a block straddles the horizon every other pixel of the row carried the sky's opaque clouds onto the
+  ground. The temporal pass is now depth-aware: a pixel not marched knows its own depth from the scene's, and its
+  estimate, its clamp and its history taps take only the marched pixels and taps that march to the same depth or whose
+  clouds lie well in front of both.
+- **Empty-space skipping** (occupancy.slang, `render.clouds.<kind>.skip`, on): per block of 8 near-map texels (2
+  far-map texels), the lowest base and the highest top of anything that can stand over it (the types' layers where they
+  cover, the cells' towers and overshoots, the anvils with their pouches and virga, rain down to the ground), dilated by
+  a block; the march jumps over a block wherever the ray is above its top or below its base, to the block's edge or to
+  where its altitude over the curved surface reaches them (coarse steps, and near the camera after an empty sample).
+- **Tests** (each fails on v0.4.0's code, run on its tree with the same test):
+  `StormSimulationTest.everyValueOfACellIsContinuousInItsAge` (a step of a second changes cover, rain, flash rate and
+  anvil by a few hundredths at most, the top by tens of metres, and nothing is left at the end; v0.4.0: cover 0.6 at
+  birth); `StormContinuityTest.aStormCellGrowsAndDecaysWithoutPops` (a cell's whole life from 25 km, ten seconds of
+  weather a frame: no frame's change above the horizon is more than three times the steady change of the ten frames
+  around it; now at most 1.54 times, v0.4.0 15.3 times as the anvil vanished with the cell at 62 minutes and 3.3 times
+  as it popped in at 18); `CloudFixesTest.theHorizonHasNoDottedRow` (the horizon's row of pixels no more alternating
+  than the rows around it: 0.69 times, v0.4.0 9.25); `RainShaftTest` (a mature storm's rain from 20 km darker than the
+  horizon beside it: 0.45 of it, v0.4.0 1.76 times brighter); `CloudFixesTest.theCheaperMarchConvergesToTheReference
+  March` with the skipping (alone 0.11 % from the reference); the others as before (`StormShapeTest`: anvil 26.2,
+  core 1,100; `aThickRainCloudIsDarkFromBelow` 1,447 cd/m² under the clear zenith's 1,504). Run once with
+  GPU-assisted validation (`TRUESIM_GPU_ASSISTED_VALIDATION=true`): no errors.
+- **Films** (`StormShots`, TRUESIM_SCREENSHOTS=true): `lifeCycle` (75 minutes of a cell from 35 km), `topRegion`
+  (minutes 10 to 28, where v0.4.0's top popped in: its largest 32-pixel block change 0.211, 4.3 times the film's median
+  block change, at 18.1 minutes; now none above 3.2 times: the cumulus field drifting by at the frame's top),
+  `multicell`, `flyBy`, `rainCurtains`; `StormShots.quick` for stills (`TRUESIM_QUICK`: ages, distance, sun, tier,
+  settings).
+- **Cost** (`CloudBenchmark`, RX 9070 XT, 1920 x 1080, 2026-11-09, medians of 60 frames, ranges of 2 rounds; other
+  agents rendered on the same GPU meanwhile), the clouds' passes in ms:
+
+  | Scene | Tier | v0.4.0 | This round, skipping off | This round (defaults) |
+  |---|---|---|---|---|
+  | fair cumulus, ground | volumetric | 2.23-2.25 | 2.77-3.23 | 2.05-2.08 |
+  | fair cumulus, ground | layered | 1.10-1.11 | 1.37-1.54 | 1.10 |
+  | overcast, ground | volumetric | 1.64-1.65 | 2.04-2.27 | 2.08-2.10 |
+  | overcast, ground | layered | 1.09 | 1.34-1.36 | 1.37-1.39 |
+  | thunderstorm, ground | volumetric | 2.04-2.06 | 4.11-4.67 | 4.12-4.18 |
+  | thunderstorm, ground | layered | 1.17 | 2.53-2.54 | 2.64-2.65 |
+  | flying through | volumetric | 2.39 | 2.77-2.78 | 2.82-2.84 |
+  | flying through | layered | 1.45-1.46 | 1.78-1.79 | 1.81 |
+  | any | skybox (2D) | 0.04-0.06 | 0.04-0.11 | 0.04-0.11 |
+
+  The storm costs more than v0.4.0's, which drew a slender column and a slab where it now draws a convective cloud and
+  an anvil tens of kilometres long; layered is within 1.5 ms in fair weather and overcast, not flying through a layer
+  (1.8) nor in the storm (2.6); volumetric in fair weather is cheaper than v0.4.0's (2.1 against 2.2 ms). The march's
+  shader grew (the storm towers, their lighting): 0.25-0.4 ms more in scenes without storms with the skipping off, where
+  nothing of it runs (register pressure is the likely cause, not measured). Empty-space skipping saves 0.3-0.4 ms
+  (layered) and 0.7-1.1 ms (volumetric) in fair weather, nothing in the storm and overcast (where little is empty: there
+  it costs 0.03-0.1 ms of look-ups), at 0.11 % from the reference image; it stays on (`render.clouds.<kind>.skip`).
+  Storm towers take the light cone in two steps (light steps 4 to 2 everywhere saved 0.5 ms in the storm), the cone
+  stops at an optical depth of 48. The weather maps cost 0.4 ms (0.2 before): the cell lists and the occupancy.
+- **Not done, or still wrong**: the voxel cache (#8); `render.clouds.airShadow` (the clouds' shadow on the air in front
+  of them) is off: effects-atmosphere's aerial perspective on the scene behind has no cloud shadows, and under a deck
+  the ground's haze at the horizon then shone brighter than the deck's
+  ([#13](https://github.com/true-sim/effects-weather/issues/13)); the low sun's look is v0.4.0's (not compared with a
+  path tracer, #10); no shelf or wall cloud; mamma hang under every spread anvil once the frame's most spread anvil is
+  half spread (not per anvil: the maps hold no anvil age); a texel lists three cells (a fourth overlapping one is left
+  out there); the gameplay field (`WeatherField`) still draws the anvil as a disc and drops a cell 90 km away at once
+  (the clouds fade it from 72 km); the 2D tier's towers are smooth columns
+  ([#14](https://github.com/true-sim/effects-weather/issues/14)); the storm's cost and the larger march
+  ([#15](https://github.com/true-sim/effects-weather/issues/15)).
 
 ## Tiers and quality presets
 
