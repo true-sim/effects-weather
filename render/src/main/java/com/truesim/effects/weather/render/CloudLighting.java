@@ -26,6 +26,15 @@ public interface CloudLighting {
     Atmosphere atmosphere();
 
     /**
+     * Scene units per lux and per cd/m² (1: physical units). The illuminances above are in scene units already; the
+     * clouds' own physical values (the flashes' candela) are scaled by it, so a sky with an exposure baked into its
+     * units (effects-atmosphere's EV100) and the clouds agree.
+     */
+    default double units() {
+        return 1;
+    }
+
+    /**
      * An exponential atmosphere: Rayleigh scattering and Mie extinction at sea level (1/m) with their scale heights
      * (m), over a planet of {@code radius} (m).
      */

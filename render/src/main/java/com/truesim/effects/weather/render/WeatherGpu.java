@@ -8,12 +8,12 @@ import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
 import com.truesim.annotations.AllowAllocation;
-import com.truesim.effects.weather.Weather;
-import com.truesim.effects.weather.WeatherConfig;
 import com.truesim.common.math.Maths;
 import com.truesim.effects.weather.Brushes;
 import com.truesim.effects.weather.StormSimulation;
+import com.truesim.effects.weather.Weather;
 import com.truesim.effects.weather.WeatherBrush;
+import com.truesim.effects.weather.WeatherConfig;
 import com.truesim.effects.weather.WeatherField;
 import com.truesim.effects.weather.WeatherGrid;
 import com.truesim.effects.weather.WeatherSample;
@@ -35,14 +35,14 @@ import com.truesim.engine.graph.Buffer;
 import com.truesim.engine.graph.BufferAccess;
 import com.truesim.engine.graph.GraphBuilder;
 import com.truesim.engine.graph.Request;
-import com.truesim.engine.vulkan.Barriers;
-import com.truesim.engine.vulkan.Pipeline;
 import com.truesim.engine.render.Camera;
 import com.truesim.engine.render.TextureFormat;
 import com.truesim.engine.render.Textures;
 import com.truesim.engine.settings.EngineSettings;
+import com.truesim.engine.vulkan.Barriers;
 import com.truesim.engine.vulkan.FrameBuffer;
 import com.truesim.engine.vulkan.FrameSlots;
+import com.truesim.engine.vulkan.Pipeline;
 import com.truesim.engine.vulkan.VulkanDevice;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -67,11 +67,6 @@ public final class WeatherGpu implements AutoCloseable {
     /** Heights per type in the profile atlas. */
     public static final int PROFILE_HEIGHTS = 64;
 
-    /**
-     * Map regions uploaded a frame at most: each takes the engine's texture updates some of the render thread's memory
-     * stack at the next frame's start, and a few hundred overflow it.
-     */
-    static final int MAX_REGIONS = 24;
 
     /** Storm cells and brushes the GPU's field takes (field.slang's MAX_CELLS, MAX_BRUSHES). */
     static final int MAX_CELLS = 64;
@@ -80,7 +75,6 @@ public final class WeatherGpu implements AutoCloseable {
     /** Seconds a storm cell takes to turn from towering cumulus into cumulonimbus on screen. */
     static final double MATURING = 180;
 
-    private static final ValueLayout.OfShort HALF = ValueLayout.JAVA_SHORT_UNALIGNED;
 
     private final Textures textures;
     private final Weather weather;
@@ -115,6 +109,7 @@ public final class WeatherGpu implements AutoCloseable {
     private double anchorZ;
     private double time;
     private boolean flashLit;
+    private double units = 1;
 
     /**
      * {@code weather}'s maps in {@code textures} (the scene's resources'), drawn with {@code types}' profiles; the
@@ -243,6 +238,11 @@ public final class WeatherGpu implements AutoCloseable {
     /** The weather's time this frame's record is for, seconds. */
     public double time() {
         return time;
+    }
+
+    /** Scene units per cd/m² of this frame's lighting ({@link CloudLighting#units}). */
+    public double units() {
+        return units;
     }
 
     /** Whether a flash lit the clouds this frame (the clouds' history gives way to it). */
@@ -386,7 +386,9 @@ public final class WeatherGpu implements AutoCloseable {
 
         // The flashes lit over the frame.
         LightningEvents events = weather.lightning();
-        flashes.select(events, config.lightning(), now - frameSeconds, now, settings.get(CloudSettings.FLASH_INTENSITY),
+        units = lighting.units();
+        flashes.select(events, config.lightning(), now - frameSeconds, now,
+            settings.get(CloudSettings.FLASH_INTENSITY) * units,
             settings.get(CloudSettings.FLASHES));
         float radius = settings.get(CloudSettings.FLASH_RADIUS);
         for (int i = 0; i < flashes.count(); i++) {

@@ -30,6 +30,7 @@ struct MarchPush
     uint lightSteps;
     float lightStep;     // the first light step, metres; each next one twice as long
     uint flags;          // MARCH_*
+    float outputScale;   // the light in the outputs is this much smaller than the radiance (scene units)
 };
 
 [[vk::push_constant]]
@@ -42,8 +43,6 @@ static const uint MARCH_GROUND = 2;
 /** Rain below the bases. */
 static const uint MARCH_RAIN = 4;
 
-/** The light in the outputs is this much smaller than the radiance (cd/m^2), within half floats' range. */
-static const float OUTPUT_SCALE = 1024.0;
 
 /**
  * The optical depth towards the sun from `p` (from the anchor) at cloud point `here`: `push.lightSteps` steps of
@@ -63,8 +62,15 @@ float sunDepth(CloudFrame* f, float3 p, float3 toSun, bool detail, CloudPoint he
         travelled += step;
         step *= 2;
     }
+    // Beyond the cone, the rest of the way to the sun: the Beer shadow map's optical depth from where the cone ended
+    // (the clouds' real shapes: a tower's sunlit side is lit), else the layer's mean extinction to its top.
+    float3 end = p + toSun * travelled;
+    if (push.shadow != 0)
+    {
+        return depth + shadowDepth(f, push.shadow, end);
+    }
     float rise = max(toSun.y, 0.05);
-    float left = max(here.top - (p.y + travelled * toSun.y), 0) / rise;
+    float left = max(here.top - end.y, 0) / rise;
     return depth + here.columnSigma * left;
 }
 
@@ -92,7 +98,9 @@ float3 cloudLight(CloudFrame* f, CloudPoint c, float3 p, float cosTheta, float t
     // sigma_s 4E / 4 pi. The octaves above carry the first orders; this the many after.
     // The optical depths to the layer's top and base at the column's mean extinction (the type's, not this sample's:
     // a wisp at a thick cloud's base is as deep below its top as the cloud is).
-    float above = c.columnSigma * (1 - c.height) * c.thickness * f[0].ambientDepth;
+    // A point is no deeper below the light from above than it is from the sun (a tower's side is near its surface).
+    float above = min(c.columnSigma * (1 - c.height) * c.thickness, tauSun * max(f[0].sunDirection.y, 0.05))
+        * f[0].ambientDepth;
     float below = c.columnSigma * c.height * c.thickness * f[0].ambientDepth;
     float3 top = sun * max(f[0].sunDirection.y, 0) + f[0].skyIlluminance;
     light += (top * diffuseTransmittance(above) + ground * diffuseTransmittance(below)) / PI;
@@ -243,6 +251,6 @@ void marchMain(uint3 id : SV_DispatchThreadID)
         float3 ap = aerialTransmittance(f, push.camera.y, push.camera.y + dir.y * mean, mean);
         light = light * ap + f[0].apRadiance * (1 - ap) * (1 - transmittance);
     }
-    images[push.output][id.xy] = float4(min(light / OUTPUT_SCALE, 60000.0), transmittance);
+    images[push.output][id.xy] = float4(min(light / push.outputScale, 60000.0), transmittance);
     images[push.depthOutput][id.xy] = float4(mean, limit, 0, 0);
 }

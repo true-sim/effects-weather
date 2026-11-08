@@ -40,7 +40,7 @@ import java.util.function.Supplier;
  */
 final class VolumetricClouds implements Technique {
 
-    /** The march's light is this much smaller than the radiance in its images (march.slang's OUTPUT_SCALE). */
+    /** The march's light is this much smaller than the physical radiance (cd/m²) in its images: half floats' range. */
     static final float OUTPUT_SCALE = 1024;
 
     private static final int DETAIL = 1;
@@ -108,7 +108,8 @@ final class VolumetricClouds implements Technique {
                     .camera((float) (camera.position(0) - gpu.anchorX()), (float) camera.position(1),
                         (float) (camera.position(2) - gpu.anchorZ()))
                     .steps(c.steps()).range(c.range()).near(c.near()).lightSteps(c.lightSteps())
-                    .lightStep(c.lightStep()).flags(flags), (w + 7) / 8, (h + 7) / 8, 1);
+                    .lightStep(c.lightStep()).flags(flags).outputScale((float) (OUTPUT_SCALE * gpu.units())),
+                    (w + 7) / 8, (h + 7) / 8, 1);
             });
 
         g.pass("cloud temporal").read(march, Access.SAMPLED_COMPUTE).read(marchDepth, Access.SAMPLED_COMPUTE)
@@ -141,7 +142,7 @@ final class VolumetricClouds implements Technique {
                     .marchSize(w | h << 16)
                     .camera((float) (camera.position(0) - gpu.anchorX()), (float) camera.position(1),
                         (float) (camera.position(2) - gpu.anchorZ()))
-                    .scale(OUTPUT_SCALE), (fullWidth + 7) / 8, (fullHeight + 7) / 8, 1);
+                    .scale((float) (OUTPUT_SCALE * gpu.units())), (fullWidth + 7) / 8, (fullHeight + 7) / 8, 1);
             });
     }
 }

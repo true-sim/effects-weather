@@ -36,6 +36,11 @@ public static const uint CIRRUS = 8;
  */
 public static const float SHAPE_LOW = 0.697;
 public static const float SHAPE_HIGH = 0.854;
+/**
+ * How far the coverage reaches into the base shape: full cover still leaves the shape's lowest tenth out, so a storm
+ * core or an overcast deck keeps its billows and a few thin spots instead of a solid cylinder or slab.
+ */
+public static const float COVER_REACH = 0.9;
 /** A shape volume slot meaning none: cloudAt's density from the coverage and profile alone (the cheap tiers). */
 public static const uint NO_NOISE = 0xffffffff;
 /** Henyey-Greenstein g of cloud droplets for similarity (diffusion): sigma (1 - g) is the reduced extinction. */
@@ -378,7 +383,7 @@ public CloudPoint cloudAt(CloudFrame* f, float3 rel, float altitude, bool detail
     float extinctionSum = 0;
     for (uint k = 0; k < 2; k++)
     {
-        if (weights[k] < 1.0e-3)
+        if (weights[k] <= 0)
         {
             continue;
         }
@@ -397,14 +402,16 @@ public CloudPoint cloudAt(CloudFrame* f, float3 rel, float altitude, bool detail
         {
             continue;
         }
-        float cover = pow(coverage, 1.0 / (1.0 + profile.y)); // the anvil widens the coverage near the top
+        // Each type covers its weight's share of the coverage: a type leaving breaks up and shrinks, as cloud fields
+        // do, instead of thinning into a veil (a thick layer at a small weight would still be opaque).
+        float cover = pow(coverage * weights[k], 1.0 / (1.0 + profile.y)); // the anvil widens the coverage at the top
         float cloud = shapeVolume == NO_NOISE ? cover * profile.x
-            : saturate(remap(shapeN * profile.x, 1 - cover, 1, 0, 1)) * cover;
+            : saturate(remap(shapeN * profile.x, 1 - COVER_REACH * cover, 1, 0, 1)) * cover;
         if (detail && cloud > 0)
         {
             cloud = saturate(remap(cloud, high * f[0].types[t].erosion * 0.4 * f[0].detailStrength, 1, 0, 1));
         }
-        float e = weights[k] * cloud * sigma;
+        float e = cloud * sigma;
         c.extinction += e;
         droplets += e * f[0].types[t].droplet;
         extinctionSum += e;
@@ -523,17 +530,40 @@ public float3 shadowCoordinates(CloudFrame* f, float3 rel)
 
 /**
  * The clouds' transmittance towards the sun at `rel` from the Beer shadow map in sampled slot `map` (front depth,
- * mean extinction behind it, maximum optical depth): exp(-min(B, G max(0, d - R))). 1 outside the map.
+ * mean extinction behind it, maximum optical depth): exp(-min(B, G max(0, d - R))). Beyond the map, the coverage
+ * projection (design §7.4): the weather map's cover where the ray towards the sun crosses 2 km, as the fraction of the
+ * sun it hides (clouds are opaque to the direct beam).
  */
 public float cloudShadow(CloudFrame* f, uint map, float3 rel)
 {
     float3 s = shadowCoordinates(f, rel);
     if (any(s.xy < 0) || any(s.xy > 1))
     {
-        return 1;
+        float3 L = f[0].sunDirection;
+        if (rel.y >= 2000 || L.y <= 0.02)
+        {
+            return 1;
+        }
+        float2 q = rel.xz + L.xz * ((2000 - rel.y) / L.y);
+        return 1 - weatherAt(f, q).coverage;
     }
     float3 v = textures[map].SampleLevel(samplers[LINEAR_CLAMP], s.xy, 0).rgb;
     return exp(-min(v.b, v.g * max(0, s.z - v.r)));
+}
+
+/**
+ * The clouds' optical depth towards the sun from `rel`, from the Beer shadow map: min(B, G max(0, d - R)); beyond the
+ * map, the coverage projection's (cloudShadow's) as a depth.
+ */
+public float shadowDepth(CloudFrame* f, uint map, float3 rel)
+{
+    float3 s = shadowCoordinates(f, rel);
+    if (any(s.xy < 0) || any(s.xy > 1))
+    {
+        return -log(max(cloudShadow(f, map, rel), 1.0e-4));
+    }
+    float3 v = textures[map].SampleLevel(samplers[LINEAR_CLAMP], s.xy, 0).rgb;
+    return min(v.b, v.g * max(0, s.z - v.r));
 }
 
 /** The clouds' vertical optical depth above `rel` from the Beer shadow map's whole column along the sun. */

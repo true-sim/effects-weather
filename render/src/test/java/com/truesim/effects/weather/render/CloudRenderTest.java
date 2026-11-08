@@ -1,6 +1,7 @@
 package com.truesim.effects.weather.render;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 import com.truesim.effects.atmosphere.Quality;
 import com.truesim.effects.weather.WeatherBrush;
@@ -239,7 +240,10 @@ class CloudRenderTest {
 
     @Test
     void aChangeOfCloudTypeIsContinuous() {
-        try (CloudScene s = new CloudScene(W, H, Quality.MEDIUM, WeatherPreset.SCATTERED, false)) {
+        // Calm: nothing drifts, so every change is the transition's.
+        var calm = com.truesim.effects.weather.WeatherConfig.forQuality(Quality.MEDIUM)
+            .withWind(com.truesim.effects.weather.WindProfile.calm());
+        try (CloudScene s = new CloudScene(W, H, calm, Quality.MEDIUM, WeatherPreset.SCATTERED, false, false)) {
             s.settings.set(Clouds.LAYERED.setting("temporal"), false); // every frame its own
             s.settings.set(CloudSettings.EVOLUTION, 0f);
             s.sun(40, 200).look(0, 2, 0, -0.3, 0.3, -1, Math.toRadians(70));
@@ -254,10 +258,11 @@ class CloudRenderTest {
                 }
                 float[] rgb = s.frames(1, 1);
                 double sum = 0;
-                for (int i = 0; i < rgb.length; i++) {
+                int sky = 3 * W * (H / 2); // the clouds: the upper half, above the horizon
+                for (int i = 0; i < sky; i++) {
                     sum += Math.abs(rgb[i] - last[i]);
                 }
-                steps[f] = sum / rgb.length;
+                steps[f] = sum / sky;
                 last = rgb;
             }
             double[] sorted = steps.clone();
@@ -268,6 +273,29 @@ class CloudRenderTest {
                 largest, java.util.Arrays.toString(java.util.Arrays.stream(steps).mapToLong(Math::round).toArray()));
             assertThat(largest).as("no frame jumps: the largest change a few times the typical one")
                 .isLessThan(4 * median);
+        }
+    }
+
+    @Test
+    void effectsAtmosphereLightsTheCloudsInItsSceneUnits() {
+        try (CloudScene s = new CloudScene(W, H, com.truesim.effects.weather.WeatherConfig.forQuality(Quality.MEDIUM),
+            Quality.MEDIUM, WeatherPreset.CLEAR, false, true)) {
+            s.weather.addBrush(WeatherBrush.set(4000, CloudType.ALTOSTRATUS, 1, 0), -3000, 0, 0);
+            s.weather.refreshAll();
+            s.ev100(14).ground(0).sun(60, 180).look(-1500, 12_000, 0, 0.001, -1, 0.001, Math.toRadians(60));
+            double[] m = coveredAndClear(s, s.frames(4, FRAME));
+            double units = s.sky.units();
+            System.out.printf("Atmosphere: covered %.3f scene units (%.0f cd/m2), clear %.3f%n", m[0], m[0] / units,
+                m[1]);
+            assertThat(units).isCloseTo(1 / (1.2 * Math.pow(2, 14)), within(1e-9));
+            assertThat(m[0] / units).as("sunlit tops, physical").isBetween(5000.0, 40_000.0);
+            assertThat(m[1]).isLessThan(0.2 * m[0]);
+            double[] sky = new double[3];
+            s.sky.sky(sky);
+            assertThat(sky[2]).as("the sky's light is blue").isGreaterThan(sky[0]).isPositive();
+            s.sky.horizon(sky);
+            assertThat(sky[1]).isPositive();
+            assertThat(s.whiteBalance()).hasSize(3);
         }
     }
 

@@ -100,9 +100,16 @@ so every way of shading (forward, the visibility buffer, transparency, ray and p
 The render techniques, on engine 0.192.0, using only its generic features (technique registry, frame graph, dynamic
 textures, the shadow table's screen-space masks, the scene's lights). Flat worlds; a planet's maps are not drawn yet.
 
-- **`WeatherGpu`**: a world's weather on the GPU. The near and far maps are dynamic RGBA16F textures of the scene's
-  `Textures`, a tile uploaded when its version changes (runs of changed tiles along a row as one region, at most 24
-  regions a frame: see the engine findings below); the profile atlas (`CloudTypes.bakeProfileAtlas`); and the frame's
+- **`WeatherGpu`**: a world's weather on the GPU. The near and far maps are `WeatherField` evaluated on the GPU every
+  frame (field.slang, from the field's small inputs: the preset in effect, the wind's offset, the storm cells, the
+  brushes; `WeatherMapGpuTest`: every texel within 0.0044 of the CPU's field at the frame's time). The CPU's maps,
+  refreshed a few tiles a step, stay the gameplay's: uploaded to the GPU they showed anything moving (cells, the wind's
+  drift) as seams at tile boundaries, and types popping as tiles came in. Each texel holds a mix of two cloud types and
+  the second's weight, continuous wherever the weather changes continuously: a preset transition's types blend by its
+  smoothstep (the CPU switches halfway), a storm cell becomes a cumulonimbus over 3 minutes and takes over from the
+  preset's type as its core outgrows the preset's cover, brushes by their falloff. The clouds add the four texels'
+  mixes around a point and blend the two heaviest types' densities, layers and droplets, and the near map hands over
+  to the far one across its outer tenth. The profile atlas (`CloudTypes.bakeProfileAtlas`); and the frame's
   `CloudFrame` record (clouds.slang): the maps' placement around an anchor (the near map's centre on the ground, so GPU
   positions stay small), the types' layers and microphysics (art applied), the noise's placement carried by the same
   wind as the coverage, the sun and sky, the atmosphere, the lighting tunables and the flashes lit this frame.
@@ -114,17 +121,24 @@ textures, the shadow table's screen-space masks, the scene's lights). Flat world
   upper part sheared downwind; the base shape (Perlin–Worley remapped by the low-frequency Worley fbm) stretched from
   its 5–95 % quantiles of the CPU reference (0.697–0.854) to [0, 1], so that the coverage remap's threshold
   `1 - coverage` leaves a cloud fraction about the coverage; eroded by the detail noise (wispy at the base, billowy
-  above), distorted by curl; times the type's physical extinction (`σ = 3·LWC / 2ρr`).
+  above), distorted by curl; times the type's extinction at density 1: its physical extinction (`σ = 3·LWC / 2ρr`, the
+  layer's mean) over the layer's mean density at full cover (half the profile's mean), so a cloud's column has its
+  water's optical depth (before, every cloud had about half of it).
 - **Lighting**: the approximate Mie phase of the type's droplet diameter (Jendersie and d'Eon 2023; HG 0.75 for ice);
   a cone march towards the sun (steps doubling); Wrenninge's octaves (a, b, c = 0.5, N = 3; Hillaire 2016); the
   diffuse light deep inside as a two-stream slab (`T = 1 / (1 + ¾(1−g)τ)`, Bohren 1987) of the sun's and sky's light
-  on the layer's top and the ground's from below (`σ_s·E/π`: an isotropic field of irradiance E has fluence 4E);
+  on the layer's top and the ground's from below (`σ_s·E/π`: an isotropic field of irradiance E has fluence 4E), the
+  optical depths to the top and base at the type's physical extinction (a wisp at a thick cloud's base is as deep below
+  its top as the cloud is); after the cone, the rest of the way to the top at the same extinction (Schneider's long
+  step); a nimbostratus deck's base from below at noon 1,149 cd/m² against sunlit tops of 14,851 (`aThickRainCloudIs
+  DarkFromBelow`);
   Hillaire 2016's energy-conserving step; the sun through the atmosphere per sample (Chapman function after Schüler
   2012) and the aerial perspective at the clouds' transmittance-weighted depth.
 - **Tiers** (`render.clouds`, `Clouds`): `volumetric` (fly-through: fine steps with detail from the camera for its first
   4 km, 160 coarse steps, 6 light steps), `layered` (default: two-speed march from outside, 96 steps, 4 light steps),
   `skybox` (2D: the coverage as the fraction of sky covered on each type's layer, lit as a two-stream slab; no noise,
-  no march, no history), off. The ray-marched tiers march at half resolution with a jittered start, accumulate
+  no march, no history), off. Steps grow with the distance (2 % of it, at least 30 m, at most the slab's share of the
+  coarse steps) out to 200 km (the far map). The ray-marched tiers march at half resolution with a jittered start, accumulate
   temporally (history reprojected by the clouds' mean depth, clamped to the 3 × 3 neighbourhood, less history while a
   flash lights them) and upsample joint-bilaterally on depth over the scene's colour (`scene·T + L`), at `Order.SKY`
   after the sky background. Every tunable is a kind config (`render.clouds.<kind>.*`) or a setting (`CloudSettings`).
@@ -132,21 +146,26 @@ textures, the shadow table's screen-space masks, the scene's lights). Flat world
   per metre at R mm/h, extinction efficiency 2), forward-scattering, lit by the sun under the clouds' Beer shadow.
 - **Cloud shadows**: `CloudShadowMap`, Hillaire 2020's Beer shadow map (front depth, mean extinction, maximum optical
   depth), 512² over 32 km along the sun, texel-snapped, 24 steps a texel on the base shape (the 2D tier's of the
-  coverage alone: no noise); `CloudShadowMask` turns it into the sun's screen-space shadow mask at each pixel, given to
+  coverage alone: no noise), and beyond it the coverage projection (the map's cover where the ray to the sun crosses
+  2 km); `CloudShadowMask` turns it into the sun's screen-space shadow mask at each pixel, given to
   shading through the shadow table (the engine's mask path; see below).
-- **Lightning**: `ActiveFlashes` picks the frame's flashes (intensity: a median first stroke's peak, 2·10⁹ cd by
-  default, scaled by the peak current, times `Flicker.average` over the frame). The clouds glow from inside by the
+- **Lightning**: `ActiveFlashes` picks the frame's flashes (intensity: a median first stroke's peak, 2·10¹⁰ cd by
+  default (Guo and Krider 1982: about 2·10⁶ W/m of optical power over a 5 km channel), scaled by the peak current, times `Flicker.average` over the frame). The clouds glow from inside by the
   diffusion approximation (fluence `I·e^(−σ_eff·r)/(D·r)`, `D = 1/(3σ(1−g))`, `σ_eff = √(3σ_a'σ(1−g))` with a leak
   `σ_a'` setting; Dobashi et al. 2001's observation that multiple scattering dominates). `LightningLights` puts a point
   `LightSource` per flash on scene nodes (so `LightSync` lights the ground and everything else); `LightningBolts` draws
   the ground flashes' `BoltGeometry` as camera-facing strips of the channel's luminance (additive, at least 1.5 pixels
   wide with the intensity kept, fading above the cloud base).
 - **Atmosphere**: `CloudLighting` is the interface the clouds need (sun direction and illuminance outside the
-  atmosphere, the sky's light, the horizon's radiance, the medium's coefficients); `SceneSky` implements it from the
-  scene's sun node over an exponential Earth atmosphere (Hillaire 2020's coefficients). effects-atmosphere's
-  `atmosphere-render` branch had no commits when this was built: once its transmittance table, sky-view and aerial
-  perspective volume land, an implementation reading them replaces `SceneSky`, and clouds.slang's analytic
-  `sunTransmittance` / `aerialTransmittance` take their tables (follow-up issue).
+  atmosphere, the sky's light, the horizon's radiance, the medium's coefficients, the scene units).
+  `AtmosphereLighting` implements it with effects-atmosphere 0.3.0's `Atmosphere` (Hillaire 2020): its sun, its
+  media's coefficients, its exposure (`sceneUnits`: the clouds' physical values, the flashes' candela among them, take
+  the same factor), its sky's mean radiance where its fog read it back; the pictures use its `AtmosphereSky`,
+  `AerialPerspective` (the media hook on surfaces) and `SkyCapture` (the environment, dimmed by the clouds' diffused
+  light: `WeatherGpu.skyBelowClouds`). `SceneSky` stays for scenes without it (a scene sun node over an exponential
+  atmosphere). Still analytic in clouds.slang: the per-sample transmittance to the sun and the clouds' own aerial
+  perspective (Chapman function on the atmosphere's coefficients) instead of its transmittance table and aerial
+  perspective volume (`atmosphere/atmosphere.slang`); the follow-up of #9.
 - **Measured** (`CloudBenchmark`, TRUESIM_BENCHMARK=true, RX 9070 XT, 2026-11-08, 1920 x 1080, ULTRA weather maps,
   march at half resolution; medians of 60 frames after 40, ranges of 3 rounds; the frame includes forward shading of
   the ground, the test sky, the depth draw for the mask and the readback):

@@ -41,7 +41,7 @@ port.add(new Clouds(gpu, view))                             // over the scene's 
     .add(new CloudShadowMask(gpu, view, renderer, lights, sunLight)) // the clouds' shadow on the ground
     .add(bolts.view(view));                                 // LightningBolts
 LightningLights flashes = new LightningLights(scene, NodeHandle.NONE, 4, 30_000);
-SceneSky sky = new SceneSky(scene, CloudLighting.Atmosphere.EARTH).sun(sunNode);
+CloudLighting sky = new AtmosphereLighting(atmosphere);     // effects-atmosphere's (or SceneSky: a scene sun node)
 // every frame, before the scene syncs its lights:
 gpu.update(weatherTime, frameSeconds, sky, settings);
 flashes.update(gpu);

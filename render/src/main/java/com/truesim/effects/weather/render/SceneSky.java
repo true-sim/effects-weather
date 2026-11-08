@@ -17,7 +17,8 @@ import java.util.Objects;
  * <li>the sun outside the atmosphere is the scene's illuminance over the atmosphere's transmittance at the ground
  *     (at least 10⁻³ of it, so a sun at the horizon does not blow up);</li>
  * <li>the sky's illuminance above the clouds is the light the atmosphere scattered out of the sun's beam on its way to
- *     the ground, half of it downwards: E_top·μ·(1 − T)·0.5, per channel;</li>
+ *     the ground, half of it downwards, plus a share of the beam for the higher orders and aerosols:
+ *     E_top·μ·(0.5·(1 − T) + 0.12·T), per channel;</li>
  * <li>the horizon's radiance is the sun's light scattered once into a long horizontal path, E_top·T_ground·(1 −
  *     e^(−β·50 km))/(4π).</li>
  * </ul>
@@ -26,6 +27,11 @@ import java.util.Objects;
 public final class SceneSky implements CloudLighting {
 
     private static final ValueLayout.OfDouble DOUBLE = ValueLayout.JAVA_DOUBLE;
+    /**
+     * The share of the transmitted beam a clear sky's higher orders and aerosols add to its diffuse light (clear-sky
+     * diffuse fractions of 15-25 % of the global horizontal irradiance at mid sun elevations).
+     */
+    private static final double DIFFUSE_FLOOR = 0.12;
 
     private final SceneGraph scene;
     private final Atmosphere atmosphere;
@@ -95,7 +101,8 @@ public final class SceneSky implements CloudLighting {
         read();
         double mu = Math.max(direction[1], 0);
         for (int c = 0; c < 3; c++) {
-            illuminance[c] = top[c] * mu * (1 - atmosphere.transmittance(c, 0, Math.max(mu, 0.02))) * 0.5;
+            double t = atmosphere.transmittance(c, 0, Math.max(mu, 0.02));
+            illuminance[c] = top[c] * mu * (0.5 * (1 - t) + DIFFUSE_FLOOR * t);
         }
     }
 

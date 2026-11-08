@@ -2,6 +2,7 @@ package com.truesim.effects.weather.render;
 
 import com.truesim.annotations.AllowAllocation;
 import com.truesim.common.graph.Id;
+import com.truesim.effects.atmosphere.render.AtmosphereSky;
 import com.truesim.engine.graph.GraphBuilder;
 import com.truesim.engine.graph.Key;
 import com.truesim.engine.graph.Order;
@@ -138,7 +139,7 @@ public final class Clouds implements Technique {
 
     @Override
     public Order order() {
-        return Order.at(Order.SKY).after(SkyBackground.ID);
+        return Order.at(Order.SKY).after(SkyBackground.ID, AtmosphereSky.ID);
     }
 
     /** The chosen kind's technique, built in this one's place (nothing when off). */

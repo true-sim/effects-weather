@@ -29,6 +29,10 @@ import com.truesim.engine.graph.Key;
 import com.truesim.engine.graph.Order;
 import com.truesim.engine.graph.Technique;
 import com.truesim.engine.graph.ViewPort;
+import com.truesim.effects.atmosphere.render.AerialPerspective;
+import com.truesim.effects.atmosphere.render.Atmosphere;
+import com.truesim.effects.atmosphere.render.AtmosphereSky;
+import com.truesim.effects.atmosphere.render.SkyCapture;
 import com.truesim.engine.render.Camera;
 import com.truesim.engine.render.ClusteredForwardShading;
 import com.truesim.engine.render.ClusteredLights;
@@ -76,7 +80,6 @@ final class CloudScene implements AutoCloseable {
     final SceneGraph nodes = new SceneGraph(new ChangeClock());
     final Weather weather;
     final WeatherGpu clouds;
-    final SceneSky sky;
     final Lights lights;
     final LightSync lightSync;
     final GpuScene scene;
@@ -89,17 +92,27 @@ final class CloudScene implements AutoCloseable {
     final LightningBolts bolts;
     final Environment environment;
     final double[] below = new double[3];
+    final Textures textures;
+    final Atmosphere atmosphere;
+    final CloudLighting sky;
+    private final double[] at = new double[3];
+    private final double[] clear = new double[3];
     final int groundMaterial;
     private final GpuBuffer pixels;
     private double time;
     LightningLights flashLights;
 
     CloudScene(int width, int height, Quality quality, WeatherPreset preset, boolean shadowMask) {
-        this(width, height, WeatherConfig.forQuality(quality), quality, preset, shadowMask);
+        this(width, height, WeatherConfig.forQuality(quality), quality, preset, shadowMask, false);
     }
 
+    /**
+     * With {@code atmosphere}, effects-atmosphere's sky, aerial perspective and sky capture (the environment, dimmed
+     * by the clouds), its exposure in its scene units (EV100: {@link #ev100}); else the analytic test sky in physical
+     * units.
+     */
     CloudScene(int width, int height, WeatherConfig config, Quality quality, WeatherPreset preset,
-        boolean shadowMask) {
+        boolean shadowMask, boolean atmosphere) {
         this.width = width;
         this.height = height;
         gpu = TestGpu.open();
@@ -112,16 +125,19 @@ final class CloudScene implements AutoCloseable {
         renderer = gpu.own(new MeshletRenderer(gpu.device, scene, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT,
             gpu.graph.frameSlots()));
         materials = gpu.own(new Materials(gpu.device, 8, gpu.graph.frameSlots()));
-        Textures textures = gpu.own(new Textures(gpu.device, gpu.graph.frameSlots()));
+        textures = gpu.own(new Textures(gpu.device, gpu.graph.frameSlots()));
         scene.setMaterials(materials);
         lights = gpu.own(new Lights(gpu.device, 16, 16, gpu.graph.frameSlots()));
         lightSync = new LightSync(nodes, lights);
         clouds = gpu.own(new WeatherGpu(gpu.device, gpu.graph.frameSlots(), textures, weather,
             CloudTypes.physical(), CloudsConfig.forQuality(quality), settings));
-        sky = new SceneSky(nodes, CloudLighting.Atmosphere.EARTH);
+        this.atmosphere = atmosphere ? gpu.own(new Atmosphere(gpu.device, gpu.graph.frameSlots(), settings)) : null;
+        sky = atmosphere ? new AtmosphereLighting(this.atmosphere) : new SceneSky(nodes, CloudLighting.Atmosphere.EARTH);
         sun = nodes.create();
         nodes.components().set(sun, LightSource.TYPE, LightSource.directional(1, 0.98f, 0.95f, 100_000));
-        sky.sun(sun);
+        if (sky instanceof SceneSky scene) {
+            scene.sun(sun);
+        }
         sun(35, 120);
 
         int ground = pool.add(quad());
@@ -152,9 +168,43 @@ final class CloudScene implements AutoCloseable {
         bolts = gpu.own(new LightningBolts(gpu.device, gpu.graph.frameSlots(), clouds, 3, 400));
         environment = Environment.uniform("sky under the clouds", 0, 0, 0);
         port.add(new EnvironmentLighting(environment, view));
-        port.add(new TestSky(clouds, view, below)).add(new Clouds(clouds, view)).add(bolts.view(view))
+        if (atmosphere) {
+            port.add(new SkyCapture(this.atmosphere, environment, textures)).add(new AtmosphereSky(this.atmosphere, view))
+                .add(new AerialPerspective(this.atmosphere, view));
+        } else {
+            port.add(new TestSky(clouds, view, below));
+        }
+        port.add(new Clouds(clouds, view)).add(bolts.view(view))
             .add(new Capture(pixels, width, height)).output(Keys.SCENE_COLOR, output);
         weather.refreshAll();
+    }
+
+    /**
+     * A camera's white balance for daylight here: gains making the light on a horizontal surface (the sun at the camera
+     * and the sky) grey; none (null) when the sun is down.
+     */
+    double[] whiteBalance() {
+        double[] direction = new double[3];
+        double[] top = new double[3];
+        double[] skyLight = new double[3];
+        sky.sun(direction, top);
+        if (atmosphere == null || direction[1] <= 0.02) {
+            return null;
+        }
+        atmosphere.lightAtCamera(0, top);
+        sky.sky(skyLight);
+        double[] white = new double[3];
+        for (int c = 0; c < 3; c++) {
+            white[c] = top[c] * direction[1] + skyLight[c];
+        }
+        double y = 0.2126 * white[0] + 0.7152 * white[1] + 0.0722 * white[2];
+        return new double[] {y / white[0], y / white[1], y / white[2]};
+    }
+
+    /** Sets the atmosphere's exposure (EV100: its scene units): pictures then need no exposure of their own. */
+    CloudScene ev100(double ev) {
+        settings.set(AtmosphereSky.ATMOSPHERE.setting("ev100"), (float) ev);
+        return this;
     }
 
     /** The time the frames have reached, seconds. */
@@ -196,6 +246,9 @@ final class CloudScene implements AutoCloseable {
         double qw = Math.sqrt((1 + dot) / 2);
         double k = qw > 1e-9 ? 1 / (2 * qw) : 0;
         nodes.setRotation(sun, cx * k, cy * k, 0, qw);
+        if (atmosphere != null) {
+            atmosphere.fixedSun(tx, ty, tz, 128_000); // the solar illuminance outside the atmosphere
+        }
         return this;
     }
 
@@ -226,12 +279,27 @@ final class CloudScene implements AutoCloseable {
             weather.advance(seconds);
             time += seconds;
             nodes.update(); // the sun's node moved: the sky reads its world transform
+            if (atmosphere != null) {
+                atmosphere.update(null, camera.position(0), camera.position(1), camera.position(2));
+                // The scene's sun: the atmosphere's at the camera, scene units.
+                atmosphere.lightAtCamera(0, at);
+                double m = Math.max(at[0], Math.max(at[1], Math.max(at[2], 1e-30)));
+                nodes.components().get(sun, LightSource.TYPE).color((float) (at[0] / m), (float) (at[1] / m),
+                    (float) (at[2] / m)).intensity(m);
+            }
             clouds.update(time, seconds, sky, settings); // before the scene syncs: the flashes' lights go through it
             bolts.update();
             // The ground's light from the sky under the clouds (the environment's), and the air's under them.
             clouds.skyBelowClouds(camera.position(0), camera.position(2), 10_000, below);
-            environment.setColor((float) (below[0] / Math.PI), (float) (below[1] / Math.PI),
-                (float) (below[2] / Math.PI));
+            if (atmosphere != null) {
+                // The captured clear sky, dimmed by the clouds as much as their diffused light is below it.
+                sky.sky(clear);
+                double ratio = (below[0] + below[1] + below[2]) / Math.max(clear[0] + clear[1] + clear[2], 1e-30);
+                environment.intensity((float) Math.clamp(ratio, 0, 4));
+            } else {
+                environment.setColor((float) (below[0] / Math.PI), (float) (below[1] / Math.PI),
+                    (float) (below[2] / Math.PI));
+            }
             if (flashLights != null) {
                 flashLights.update(clouds);
                 nodes.update();

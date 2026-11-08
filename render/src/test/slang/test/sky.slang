@@ -67,10 +67,10 @@ void skyMain(uint3 id : SV_DispatchThreadID)
         float mie = f[0].mieScattering * exp(-h / f[0].mieHeight);
         float3 extinction = rayleigh + f[0].mieExtinction * exp(-h / f[0].mieHeight);
         float shade = push.shadow != 0 ? cloudShadow(f, push.shadow, p) : 1;
-        // Under the clouds (below their tops), the air is lit by their diffused light too (about isotropically).
-        float under = h < f[0].maxAltitude ? 1 : 0;
+        // The air is lit by the light from above too (the sky's, or under clouds their diffused light), about
+        // isotropically: the higher orders of scattering.
         float3 scattered = (rayleigh * rayleighPhase + mie * miePhase) * f[0].sunIlluminance * sunTransmittance(f, h)
-            * shade + (rayleigh + mie) * diffused * 0.5 * under;
+            * shade + (rayleigh + mie) * diffused * 0.5;
         float3 through = exp(-extinction * step);
         light += view * scattered * (1 - through) / max(extinction, 1.0e-12);
         view *= through;

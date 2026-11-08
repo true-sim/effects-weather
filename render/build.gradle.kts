@@ -10,6 +10,7 @@ description = "The weather drawn by true-sim's engine: volumetric, layered and 2
 dependencies {
     api(project(":weather-model"))
     api("com.truesim.engine:engine-scene:0.192.0") // the renderer, the frame graph, the scene's lights
+    api("com.truesim.effects:atmosphere-render:0.3.0") // the atmosphere the clouds are lit through (AtmosphereLighting)
     testImplementation(testFixtures("com.truesim.engine:engine-render:0.192.0")) // the headless renderer
     testImplementation("com.truesim.scene:scene-meshbuild:0.70.0")
 }

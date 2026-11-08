@@ -356,4 +356,20 @@ class WeatherTest {
         sink.add(WeatherComponents.BRUSH.name());
         assertThat(sink).containsExactly("truesim.weather.brush");
     }
+
+    @Test
+    void theFieldTellsItsInputs() {
+        Weather weather = new Weather(WeatherConfig.forQuality(Quality.LOW), WeatherDomain.flat(), WeatherPreset.FAIR);
+        for (int i = 0; i < 10; i++) {
+            weather.step();
+        }
+        WeatherField field = weather.field();
+        assertThat(field.state()).isSameAs(weather.state());
+        assertThat(field.offset(0)).isCloseTo(weather.driftEast(), within(1e-9));
+        assertThat(field.offset(1)).isZero();
+        assertThat(field.offset(2)).isCloseTo(-weather.driftNorth(), within(1e-9));
+        assertThat(field.octaves()).isEqualTo(weather.config().noiseOctaves());
+        assertThat(field.seed()).isEqualTo((int) weather.config().seed());
+        assertThat(WeatherField.noisePeriod()).isEqualTo(1 << 16);
+    }
 }

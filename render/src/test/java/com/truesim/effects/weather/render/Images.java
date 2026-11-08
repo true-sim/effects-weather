@@ -27,13 +27,24 @@ final class Images {
 
     /** {@code rgb} (cd/m²) times {@code exposure}, tone mapped, as {@code name}.png in {@link #directory()}. */
     static Path write(String name, float[] rgb, int width, int height, double exposure) {
+        return write(name, rgb, width, height, exposure, null);
+    }
+
+    /**
+     * As {@link #write(String, float[], int, int, double)}, white balanced by {@code gains} (per channel, null: none),
+     * as a camera set to the daylight falling on the scene would be.
+     */
+    static Path write(String name, float[] rgb, int width, int height, double exposure, double[] gains) {
+        double gr = gains == null ? 1 : gains[0];
+        double gg = gains == null ? 1 : gains[1];
+        double gb = gains == null ? 1 : gains[2];
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 int o = 3 * (y * width + x);
-                int r = encode(rgb[o] * exposure);
-                int g = encode(rgb[o + 1] * exposure);
-                int b = encode(rgb[o + 2] * exposure);
+                int r = encode(rgb[o] * exposure * gr);
+                int g = encode(rgb[o + 1] * exposure * gg);
+                int b = encode(rgb[o + 2] * exposure * gb);
                 image.setRGB(x, y, r << 16 | g << 8 | b);
             }
         }
