@@ -112,7 +112,7 @@ public final class CloudShadowMask implements Technique, AutoCloseable {
                 ctx.dispatch(program, push.view(view.view().address()).frame(gpu.address())
                     .output(ctx.storage(mask)).depth(ctx.sampled(depth)).shadow(ctx.sampled(shadow))
                     .size(width | height << 16)
-                    .camera((float) (camera.position(0) - gpu.anchorX()), (float) camera.position(1),
+                    .camera((float) (camera.position(0) - gpu.anchorX()), (float) (camera.position(1) - gpu.anchorY()),
                         (float) (camera.position(2) - gpu.anchorZ())), (width + 7) / 8, (height + 7) / 8, 1);
             });
         int entry = entry(table);

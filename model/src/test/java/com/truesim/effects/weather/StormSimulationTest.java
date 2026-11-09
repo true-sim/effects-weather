@@ -69,6 +69,34 @@ class StormSimulationTest {
         assertThat(kinds[FlashType.INTRACLOUD.ordinal()]).isGreaterThan(kinds[FlashType.NEGATIVE_GROUND.ordinal()]);
     }
 
+    /** A flat world's ground above y = 0 (a terrain's valley floor): the strikes reach it, the flashes start above it. */
+    @Test
+    void theFlashesStandOnARaisedGround() {
+        WeatherDomain domain = WeatherDomain.flat(800);
+        assertThat(domain.altitude(5, 2300, 7)).isEqualTo(1500);
+        double[] p = new double[3];
+        domain.planeToGround(10, 20, p, 0);
+        assertThat(p).containsExactly(10, 800, 20);
+        LightningEvents events = new LightningEvents(4096);
+        StormSimulation storms = new StormSimulation(StormConfig.defaults().withDaughterRate(0),
+            LightningConfig.defaults(), events, domain, 1);
+        int s = storms.spawn(0, 800, 0);
+        for (int t = 0; storms.active(s); t++) {
+            storms.step(t, 1, 0, WindProfile.calm(), 1, 0, 800, 0);
+        }
+        int[] ground = {0};
+        events.forEachSince(-1, (e, slot, id) -> {
+            if (e.type(slot).strikesGround()) {
+                ground[0]++;
+                assertThat(e.end(slot, 1)).isCloseTo(800, within(1e-9));
+                assertThat(e.origin(slot, 1)).isGreaterThan(2800);
+            } else {
+                assertThat(e.end(slot, 1)).isGreaterThan(3800);
+            }
+        });
+        assertThat(ground[0]).isPositive();
+    }
+
     /**
      * Every value a cell shows is continuous in its age: a step of a second changes its cover, rain, flash rate and anvil
      * by at most a few hundredths and its top by tens of metres, at birth, at every stage boundary and at its end
