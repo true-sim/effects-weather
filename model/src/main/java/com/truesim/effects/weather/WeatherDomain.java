@@ -3,7 +3,8 @@ package com.truesim.effects.weather;
 import com.truesim.effects.atmosphere.ephemeris.Planet;
 
 /**
- * The world the weather covers: a flat world (x east, y up, z south, the ground at y = 0) or a planet (centred at the
+ * The world the weather covers: a flat world (x east, y up, z south, the ground at y = {@link #ground()}, 0 unless
+ * given: a terrain whose y is the height above sea level puts the weather's ground at its own) or a planet (centred at the
  * origin, its pole on +y, spherical with the planet's equatorial radius; altitudes above that sphere). The planet is
  * what makes the weather global, up to orbit: the far map covers it whole.
  *
@@ -17,6 +18,7 @@ public final class WeatherDomain {
     private final boolean sphere;
     private final double[] scratch = new double[9];
     private final double radius;
+    private final double ground;
     // The plane's anchor frame: up (anchor direction), east, north; on a flat world the identity.
     private double ux;
     private double uy = 1;
@@ -28,19 +30,30 @@ public final class WeatherDomain {
     private double ny;
     private double nz = -1;
 
-    private WeatherDomain(boolean sphere, double radius) {
+    private WeatherDomain(boolean sphere, double radius, double ground) {
         this.sphere = sphere;
         this.radius = radius;
+        this.ground = ground;
     }
 
-    /** A flat world. */
+    /** A flat world, the ground at y = 0. */
     public static WeatherDomain flat() {
-        return new WeatherDomain(false, Double.POSITIVE_INFINITY);
+        return flat(0);
+    }
+
+    /**
+     * A flat world, the ground at y = {@code ground} metres: the altitudes the weather works in (the clouds' layers,
+     * the storms', the wind's) are above it, the lightning strikes it. A world whose y is the height above sea level
+     * (a terrain's) gives the mean height of its ground around the scene, e.g. a valley floor's.
+     */
+    public static WeatherDomain flat(double ground) {
+        Checks.range(ground, -12_000, 100_000, "ground");
+        return new WeatherDomain(false, Double.POSITIVE_INFINITY, ground);
     }
 
     /** A spherical planet of {@code planet}'s equatorial radius, anchored at its north pole until re-anchored. */
     public static WeatherDomain sphere(Planet planet) {
-        WeatherDomain d = new WeatherDomain(true, planet.equatorialRadius());
+        WeatherDomain d = new WeatherDomain(true, planet.equatorialRadius(), 0);
         d.reanchor(0, planet.equatorialRadius(), 0);
         return d;
     }
@@ -54,16 +67,21 @@ public final class WeatherDomain {
         return radius;
     }
 
+    /** A flat world's ground, y metres (0 on a planet: its altitudes are above the sphere). */
+    public double ground() {
+        return ground;
+    }
+
     /** The height of (x, y, z) above the ground. */
     public double altitude(double x, double y, double z) {
-        return sphere ? Math.sqrt(x * x + y * y + z * z) - radius : y;
+        return sphere ? Math.sqrt(x * x + y * y + z * z) - radius : y - ground;
     }
 
     /** Writes the ground point under (x, y, z) at {@code out[o..o+2]}. */
     public void surface(double x, double y, double z, double[] out, int o) {
         if (!sphere) {
             out[o] = x;
-            out[o + 1] = 0;
+            out[o + 1] = ground;
             out[o + 2] = z;
             return;
         }
@@ -150,7 +168,7 @@ public final class WeatherDomain {
     public void planeToGround(double px, double pz, double[] out, int o) {
         if (!sphere) {
             out[o] = px;
-            out[o + 1] = 0;
+            out[o + 1] = ground;
             out[o + 2] = pz;
             return;
         }

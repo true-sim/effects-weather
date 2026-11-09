@@ -360,6 +360,11 @@ public final class WeatherGpu implements AutoCloseable {
         return anchorX;
     }
 
+    /** The anchor's ground, y (metres, world): the flat domain's {@link com.truesim.effects.weather.WeatherDomain#ground}. */
+    public double anchorY() {
+        return weather.domain().ground();
+    }
+
     /** The anchor's ground position, z. */
     public double anchorZ() {
         return anchorZ;
@@ -396,7 +401,7 @@ public final class WeatherGpu implements AutoCloseable {
     /** The camera's position from the anchor: x and z on the ground, y its altitude; into {@code out[0..2]}. */
     public void fromAnchor(Camera camera, float[] out) {
         out[0] = (float) (camera.position(0) - anchorX);
-        out[1] = (float) camera.position(1);
+        out[1] = (float) (camera.position(1) - anchorY());
         out[2] = (float) (camera.position(2) - anchorZ);
     }
 
@@ -601,10 +606,10 @@ public final class WeatherGpu implements AutoCloseable {
         for (int i = 0; i < flashes.count(); i++) {
             int slot = flashes.slot(i);
             long o = CloudFrameLayout.FLASHES + (long) i * FlashLayout.BYTES;
-            put3(f, o + FlashLayout.A, events.origin(slot, 0) - anchorX, events.origin(slot, 1),
+            put3(f, o + FlashLayout.A, events.origin(slot, 0) - anchorX, events.origin(slot, 1) - anchorY(),
                 events.origin(slot, 2) - anchorZ);
             f.putFloat(o + FlashLayout.INTENSITY, (float) flashes.intensity(i));
-            put3(f, o + FlashLayout.B, events.end(slot, 0) - anchorX, events.end(slot, 1),
+            put3(f, o + FlashLayout.B, events.end(slot, 0) - anchorX, events.end(slot, 1) - anchorY(),
                 events.end(slot, 2) - anchorZ);
             f.putFloat(o + FlashLayout.RADIUS, radius);
         }

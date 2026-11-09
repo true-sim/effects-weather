@@ -182,7 +182,7 @@ final class VolumetricClouds implements Technique {
                     .noise(noise.shape() | noise.detail() << 16).maps(noise.curl() | ctx.sampled(shadow) << 16)
                     .size(w | h << 16)
                     .fullSize(fullWidth | fullHeight << 16).frameIndex(c.temporal() ? (int) ctx.frame() : 0)
-                    .camera((float) (camera.position(0) - gpu.anchorX()), (float) camera.position(1),
+                    .camera((float) (camera.position(0) - gpu.anchorX()), (float) (camera.position(1) - gpu.anchorY()),
                         (float) (camera.position(2) - gpu.anchorZ()))
                     .counts(c.steps() | c.lightSteps() << 16 | Math.min(c.lightStepsFar(), c.lightSteps()) << 24)
                     .range(c.range()).near(c.near()).lightFar(c.lightFar()).lightStep(c.lightStep()).flags(flags)
@@ -230,7 +230,7 @@ final class VolumetricClouds implements Technique {
                     .color(ctx.storage(color)).depth(ctx.sampled(depth)).clouds(ctx.sampled(history.current()))
                     .cloudDepth(ctx.sampled(historyDepth.current())).size(fullWidth | fullHeight << 16)
                     .marchSize(w | h << 16)
-                    .camera((float) (camera.position(0) - gpu.anchorX()), (float) camera.position(1),
+                    .camera((float) (camera.position(0) - gpu.anchorX()), (float) (camera.position(1) - gpu.anchorY()),
                         (float) (camera.position(2) - gpu.anchorZ()))
                     .scale((float) (OUTPUT_SCALE * gpu.units())), (fullWidth + 7) / 8, (fullHeight + 7) / 8, 1);
             });

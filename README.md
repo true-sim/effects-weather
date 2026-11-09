@@ -23,6 +23,8 @@ measurements and the plan: [docs/design.md](docs/design.md).
 
 ```java
 Weather weather = new Weather(WeatherConfig.forQuality(Quality.HIGH), WeatherDomain.flat(), WeatherPreset.FAIR);
+// A terrain whose y is the height above sea level: WeatherDomain.flat(valleyFloor) puts the weather's ground there
+// (the clouds' layers, the storms and the wind stand on it, the lightning strikes it).
 weather.setPreset(WeatherPreset.STORM, 1800);           // a storm rolls in over half an hour
 weather.addBrush(WeatherBrush.clear(5000), 0, 0, 0);    // the airfield stays clear
 // every frame:

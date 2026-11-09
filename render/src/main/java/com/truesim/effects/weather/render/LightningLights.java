@@ -53,7 +53,8 @@ public final class LightningLights {
         for (int i = 0; i < nodes.length; i++) {
             if (i < flashes.count()) {
                 int slot = flashes.slot(i);
-                double t = events.end(slot, 1) <= 1 ? channelBase(events, slot) : 0.5;
+                double ground = gpu.anchorY();
+                double t = events.end(slot, 1) - ground <= 1 ? channelBase(events, slot, ground) : 0.5;
                 double x = events.origin(slot, 0) + t * (events.end(slot, 0) - events.origin(slot, 0));
                 double y = events.origin(slot, 1) + t * (events.end(slot, 1) - events.origin(slot, 1));
                 double z = events.origin(slot, 2) + t * (events.end(slot, 2) - events.origin(slot, 2));
@@ -66,8 +67,8 @@ public final class LightningLights {
     }
 
     /** Where along a ground flash's channel (0 its origin in the cloud, 1 the ground) the light goes: below the cloud. */
-    private static double channelBase(LightningEvents events, int slot) {
-        double top = events.origin(slot, 1);
+    private static double channelBase(LightningEvents events, int slot, double ground) {
+        double top = events.origin(slot, 1) - ground;
         return top > 0 ? Math.min(0.8, Math.max(0.3, 1 - 1500 / top)) : 0.5;
     }
 }

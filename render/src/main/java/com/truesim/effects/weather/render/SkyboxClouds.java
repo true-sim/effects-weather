@@ -54,7 +54,7 @@ final class SkyboxClouds implements Technique {
             int height = ctx.regionHeight(color);
             ctx.dispatch(program, push.view(view.view().address()).frame(gpu.address()).color(ctx.storage(color))
                 .depth(ctx.sampled(depth)).size(width | height << 16)
-                .camera((float) (camera.position(0) - gpu.anchorX()), (float) camera.position(1),
+                .camera((float) (camera.position(0) - gpu.anchorX()), (float) (camera.position(1) - gpu.anchorY()),
                     (float) (camera.position(2) - gpu.anchorZ()))
                 .scale(config.get().aerialPerspective() ? 1 : 0), (width + 7) / 8, (height + 7) / 8, 1);
         });

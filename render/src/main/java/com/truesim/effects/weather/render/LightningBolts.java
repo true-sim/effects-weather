@@ -120,14 +120,15 @@ public final class LightningBolts implements AutoCloseable {
                 weather.sample(mx, my, mz, sample);
                 double base = sample.coverage() > 0.05
                     ? gpu.types().profile(sample.cloudType()).base() : Double.POSITIVE_INFINITY;
-                double hidden = my > base ? Maths.exp(-(my - base) / fade) : 1;
+                double up = my - gpu.anchorY(); // the altitude, as the profiles' base
+                double hidden = up > base ? Maths.exp(-(up - base) / fade) : 1;
                 long o = (long) count * BoltSegmentLayout.BYTES;
                 segments.putFloat(o + BoltSegmentLayout.A, (float) (bolt.x(p) - gpu.anchorX()));
-                segments.putFloat(o + BoltSegmentLayout.A + 4, (float) bolt.y(p));
+                segments.putFloat(o + BoltSegmentLayout.A + 4, (float) (bolt.y(p) - gpu.anchorY()));
                 segments.putFloat(o + BoltSegmentLayout.A + 8, (float) (bolt.z(p) - gpu.anchorZ()));
                 segments.putFloat(o + BoltSegmentLayout.LUMINANCE, (float) (luminance * bolt.brightness(s) * hidden));
                 segments.putFloat(o + BoltSegmentLayout.B, (float) (bolt.x(q) - gpu.anchorX()));
-                segments.putFloat(o + BoltSegmentLayout.B + 4, (float) bolt.y(q));
+                segments.putFloat(o + BoltSegmentLayout.B + 4, (float) (bolt.y(q) - gpu.anchorY()));
                 segments.putFloat(o + BoltSegmentLayout.B + 8, (float) (bolt.z(q) - gpu.anchorZ()));
                 segments.putFloat(o + BoltSegmentLayout.WIDTH, width * (bolt.depth(s) == 0 ? 1 : 0.6f));
                 count++;
@@ -214,7 +215,7 @@ public final class LightningBolts implements AutoCloseable {
                     Camera camera = view.camera();
                     ctx.draw(pipeline, push.view(view.view().address()).segments(bolts.segments.deviceAddress())
                         .depth(ctx.sampled(depth)).size(ctx.regionWidth(color) | ctx.regionHeight(color) << 16)
-                        .camera((float) (camera.position(0) - gpu.anchorX()), (float) camera.position(1),
+                        .camera((float) (camera.position(0) - gpu.anchorX()), (float) (camera.position(1) - gpu.anchorY()),
                             (float) (camera.position(2) - gpu.anchorZ())).minPixels(1.5f), 6 * n, 1);
                 });
         }
